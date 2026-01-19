@@ -8,16 +8,140 @@ const fs = require('fs').promises;
 const app = express();
 app.use(express.json());
 
-// ==================== INITIALISATION FIREBASE ====================
-if (!admin.apps.length) {
-  admin.initializeApp({
-    credential: admin.credential.applicationDefault(),
-    databaseURL: `https://${process.env.FIREBASE_PROJECT_ID}.firebaseio.com`
-  });
-}
+// ==================== INITIALISATION FIREBASE POUR RENDER ====================
+console.log('🔧 Début initialisation Firebase...');
 
-const db = admin.firestore();
-const FieldValue = admin.firestore.FieldValue;
+let db;
+let FieldValue;
+let firebaseInitialized = false;
+
+try {
+  // Vérifier si Firebase est déjà initialisé
+  if (admin.apps.length === 0) {
+    console.log('📁 Configuration Firebase pour Render...');
+    
+    // Vérifier les variables d'environnement
+    if (!process.env.FIREBASE_PROJECT_ID) {
+      console.error('❌ FIREBASE_PROJECT_ID manquant');
+      throw new Error('FIREBASE_PROJECT_ID manquant');
+    }
+    
+    if (!process.env.FIREBASE_SERVICE_ACCOUNT_KEY) {
+      console.error('❌ FIREBASE_SERVICE_ACCOUNT_KEY manquant');
+      throw new Error('FIREBASE_SERVICE_ACCOUNT_KEY manquant');
+    }
+    
+    console.log(`📊 Project ID: ${process.env.FIREBASE_PROJECT_ID}`);
+    
+    // Parser la clé de service
+    let serviceAccount;
+    try {
+      serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_KEY);
+      console.log('✅ Clé de service JSON parsée avec succès');
+    } catch (parseError) {
+      console.error('❌ Erreur parsing JSON:', parseError.message);
+      throw new Error('Format JSON invalide pour FIREBASE_SERVICE_ACCOUNT_KEY');
+    }
+    
+    // Initialiser Firebase
+    admin.initializeApp({
+      credential: admin.credential.cert(serviceAccount),
+      databaseURL: `https://${process.env.FIREBASE_PROJECT_ID}.firebaseio.com`,
+      projectId: process.env.FIREBASE_PROJECT_ID
+    });
+    
+    console.log('✅ Firebase Admin SDK initialisé');
+  } else {
+    console.log('✅ Firebase déjà initialisé');
+  }
+  
+  // Obtenir les instances
+  db = admin.firestore();
+  FieldValue = admin.firestore.FieldValue;
+  
+  // Tester la connexion
+  console.log('🔍 Test de connexion Firestore...');
+  const testRef = db.collection('system_health').doc('connection_test');
+  await testRef.set({
+    timestamp: new Date().toISOString(),
+    service: 'pillbox-whatsapp-bot',
+    status: 'connected',
+    environment: process.env.NODE_ENV || 'production'
+  });
+  
+  console.log('✅ Connexion Firestore établie avec succès');
+  firebaseInitialized = true;
+  
+} catch (error) {
+  console.error('❌ ERREUR CRITIQUE Firebase:', error.message);
+  
+  // Mode simulation détaillé pour éviter les crashes
+  console.log('🔧 Activation du mode simulation Firestore...');
+  
+  db = {
+    collection: (name) => {
+      console.log(`📊 Mock collection: ${name}`);
+      return {
+        doc: (id) => ({
+          get: async () => {
+            console.log(`📊 Mock get: ${name}/${id}`);
+            return {
+              exists: false,
+              data: () => null,
+              id: id
+            };
+          },
+          set: async (data) => {
+            console.log(`📊 Mock set: ${name}/${id}`);
+            return { id: id };
+          },
+          update: async (data) => {
+            console.log(`📊 Mock update: ${name}/${id}`);
+            return { id: id };
+          }
+        }),
+        where: (field, op, value) => ({
+          get: async () => {
+            console.log(`📊 Mock query: ${name} where ${field} ${op} ${value}`);
+            return {
+              empty: true,
+              docs: [],
+              forEach: () => {}
+            };
+          },
+          limit: (count) => ({
+            get: async () => {
+              console.log(`📊 Mock query with limit ${count}: ${name}`);
+              return { empty: true, docs: [] };
+            }
+          })
+        }),
+        add: async (data) => {
+          const mockId = 'mock-' + Date.now();
+          console.log(`📊 Mock add to ${name}`);
+          return { id: mockId };
+        },
+        get: async () => {
+          console.log(`📊 Mock get all: ${name}`);
+          return { empty: true, docs: [] };
+        }
+      };
+    }
+  };
+  
+  FieldValue = {
+    increment: (value) => {
+      console.log(`📊 Mock FieldValue.increment(${value})`);
+      return value;
+    },
+    serverTimestamp: () => {
+      console.log(`📊 Mock FieldValue.serverTimestamp()`);
+      return new Date();
+    }
+  };
+  
+  console.log('⚠️ Mode simulation activé - Les données ne seront pas sauvegardées');
+}
 
 // ==================== CONFIGURATION ====================
 const CONFIG = {
@@ -177,7 +301,7 @@ async function sendInteractiveMessageWithTyping(to, text, buttons) {
     return response.data.messages?.[0]?.id;
     
   } catch (error) {
-    console.error('❌ Erreur envoi interactif:', error.message);
+    console.error('❌ Erreur envoi interactif:', error.response?.data || error.message);
     return null;
   }
 }
@@ -193,67 +317,91 @@ async function sendInteractiveMessage(to, text, buttons) {
 
 // ==================== FONCTIONS UTILITAIRES ====================
 async function getPharmacie(id) {
-  const doc = await db.collection('pharmacies').doc(id).get();
-  return doc.exists ? { id: doc.id, ...doc.data() } : null;
+  try {
+    const doc = await db.collection('pharmacies').doc(id).get();
+    return doc.exists ? { id: doc.id, ...doc.data() } : null;
+  } catch (error) {
+    console.error('Erreur getPharmacie:', error.message);
+    return null;
+  }
 }
 
 async function getMedicaments(pharmacieId = null, recherche = null, categorie = null) {
-  let query = db.collection('medicaments').where('stock', '>', 0);
-  
-  if (pharmacieId) {
-    query = query.where('pharmacieId', '==', pharmacieId);
+  try {
+    let query = db.collection('medicaments').where('stock', '>', 0);
+    
+    if (pharmacieId) {
+      query = query.where('pharmacieId', '==', pharmacieId);
+    }
+    
+    if (recherche && recherche.length > 2) {
+      const rechercheLower = recherche.toLowerCase();
+      const snapshot = await query.get();
+      return snapshot.docs
+        .map(doc => ({ id: doc.id, ...doc.data() }))
+        .filter(m => 
+          m.nom.toLowerCase().includes(rechercheLower) ||
+          (m.sousTitre && m.sousTitre.toLowerCase().includes(rechercheLower))
+        )
+        .slice(0, 15);
+    }
+    
+    if (categorie) {
+      query = query.where('categorie', '==', categorie);
+    }
+    
+    const snapshot = await query.limit(20).get();
+    return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+  } catch (error) {
+    console.error('Erreur getMedicaments:', error.message);
+    return [];
   }
-  
-  if (recherche && recherche.length > 2) {
-    const rechercheLower = recherche.toLowerCase();
-    const snapshot = await query.get();
-    return snapshot.docs
-      .map(doc => ({ id: doc.id, ...doc.data() }))
-      .filter(m => 
-        m.nom.toLowerCase().includes(rechercheLower) ||
-        (m.sousTitre && m.sousTitre.toLowerCase().includes(rechercheLower))
-      )
-      .slice(0, 15);
-  }
-  
-  if (categorie) {
-    query = query.where('categorie', '==', categorie);
-  }
-  
-  const snapshot = await query.limit(20).get();
-  return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
 }
 
 async function getCategories() {
-  const snapshot = await db.collection('medicaments')
-    .select('categorie')
-    .get();
-  
-  const categories = new Set();
-  snapshot.docs.forEach(doc => {
-    if (doc.data().categorie) {
-      categories.add(doc.data().categorie);
-    }
-  });
-  
-  return Array.from(categories);
+  try {
+    const snapshot = await db.collection('medicaments')
+      .select('categorie')
+      .get();
+    
+    const categories = new Set();
+    snapshot.docs.forEach(doc => {
+      if (doc.data().categorie) {
+        categories.add(doc.data().categorie);
+      }
+    });
+    
+    return Array.from(categories);
+  } catch (error) {
+    console.error('Erreur getCategories:', error.message);
+    return [];
+  }
 }
 
 async function getPharmaciesDeGarde() {
-  const snapshot = await db.collection('pharmacies')
-    .where('estDeGarde', '==', true)
-    .where('estOuvert', '==', true)
-    .limit(10)
-    .get();
-  
-  return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+  try {
+    const snapshot = await db.collection('pharmacies')
+      .where('estDeGarde', '==', true)
+      .where('estOuvert', '==', true)
+      .limit(10)
+      .get();
+    
+    return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+  } catch (error) {
+    console.error('Erreur getPharmaciesDeGarde:', error.message);
+    return [];
+  }
 }
 
 async function updateStock(medicamentId, quantite) {
-  const medicamentRef = db.collection('medicaments').doc(medicamentId);
-  await medicamentRef.update({
-    stock: FieldValue.increment(-quantite)
-  });
+  try {
+    const medicamentRef = db.collection('medicaments').doc(medicamentId);
+    await medicamentRef.update({
+      stock: FieldValue.increment(-quantite)
+    });
+  } catch (error) {
+    console.error('Erreur updateStock:', error.message);
+  }
 }
 
 // ==================== FONCTIONS DE CALCUL ====================
@@ -348,7 +496,7 @@ Règles:
     return response.data.choices[0].message.content.trim();
   } catch (error) {
     console.error('Erreur Groq:', error.message);
-    return null;
+    return "Désolé, je ne peux pas répondre pour le moment. Comment puis-je vous aider avec Pillbox ?";
   }
 }
 
@@ -809,26 +957,30 @@ const livreurManager = {
   
   // Notifie le client que la livraison est en cours
   async notifierClientLivraisonEnCours(commande) {
-    const message = `🚗 **LIVRAISON EN COURS!**\n\n` +
-      `Votre commande #${commande.id.substring(0, 8)} a été acceptée par un livreur.\n\n` +
-      `👤 **Votre livreur:**\n` +
-      `• Nom: ${commande.livreurNom}\n` +
-      `• Tél: ${commande.livreurTelephone}\n\n` +
-      `🏥 **Pharmacie:** ${commande.pharmacieNom}\n\n` +
-      `💬 **Vous pouvez communiquer avec votre livreur directement sur WhatsApp:**\n` +
-      `Cliquez ici pour envoyer un message: https://wa.me/${commande.livreurTelephone.replace('+', '')}\n\n` +
-      `📱 Ou répondez à ce message (il sera transféré au livreur).`;
-    
-    await sendTextMessage(commande.client.telephone, message);
-    
-    // Mettre à jour pour activer le chat
-    await db.collection('commandes').doc(commande.id).update({
-      chatActive: true,
-      notifications: {
-        clientNotified: true,
-        dateNotification: Date.now()
-      }
-    });
+    try {
+      const message = `🚗 **LIVRAISON EN COURS!**\n\n` +
+        `Votre commande #${commande.id.substring(0, 8)} a été acceptée par un livreur.\n\n` +
+        `👤 **Votre livreur:**\n` +
+        `• Nom: ${commande.livreurNom}\n` +
+        `• Tél: ${commande.livreurTelephone}\n\n` +
+        `🏥 **Pharmacie:** ${commande.pharmacieNom}\n\n` +
+        `💬 **Vous pouvez communiquer avec votre livreur directement sur WhatsApp:**\n` +
+        `Cliquez ici pour envoyer un message: https://wa.me/${commande.livreurTelephone.replace('+', '')}\n\n` +
+        `📱 Ou répondez à ce message (il sera transféré au livreur).`;
+      
+      await sendTextMessage(commande.client.telephone, message);
+      
+      // Mettre à jour pour activer le chat
+      await db.collection('commandes').doc(commande.id).update({
+        chatActive: true,
+        notifications: {
+          clientNotified: true,
+          dateNotification: Date.now()
+        }
+      });
+    } catch (error) {
+      console.error("Erreur notification client:", error);
+    }
   },
   
   // Trouve un autre livreur si refus
@@ -1417,76 +1569,92 @@ const panierManager = {
 
 // ==================== FONCTIONS DE NOTIFICATION ====================
 async function notifierClientLivraisonTerminee(commandeId) {
-  const commandeDoc = await db.collection('commandes').doc(commandeId).get();
-  if (!commandeDoc.exists) return;
-  
-  const commande = commandeDoc.data();
-  
-  await sendTextMessage(commande.client.telephone,
-    `✅ **Livraison effectuée!**\n\n` +
-    `Votre commande #${commandeId.substring(0, 8)} a été livrée avec succès.\n\n` +
-    `Merci d'avoir utilisé Pillbox! 💊`
-  );
+  try {
+    const commandeDoc = await db.collection('commandes').doc(commandeId).get();
+    if (!commandeDoc.exists) return;
+    
+    const commande = commandeDoc.data();
+    
+    await sendTextMessage(commande.client.telephone,
+      `✅ **Livraison effectuée!**\n\n` +
+      `Votre commande #${commandeId.substring(0, 8)} a été livrée avec succès.\n\n` +
+      `Merci d'avoir utilisé Pillbox! 💊`
+    );
+  } catch (error) {
+    console.error("Erreur notification livraison terminée:", error);
+  }
 }
 
 async function notifierClientValidationOrdonnance(commandeId, validee) {
-  const commandeDoc = await db.collection('commandes').doc(commandeId).get();
-  if (!commandeDoc.exists) return;
-  
-  const commande = commandeDoc.data();
-  
-  if (validee) {
-    await sendTextMessage(commande.client.telephone,
-      `✅ **Ordonnance validée!**\n\n` +
-      `Votre ordonnance a été validée par la pharmacie ${commande.pharmacieNom}.\n\n` +
-      `Un livreur va être assigné à votre commande.\n\n` +
-      `Merci pour votre patience.`
-    );
-  } else {
-    await sendTextMessage(commande.client.telephone,
-      `❌ **Ordonnance refusée**\n\n` +
-      `La pharmacie a refusé votre ordonnance.\n\n` +
-      `Nous transférons votre commande à une autre pharmacie de garde.\n\n` +
-      `Nous vous recontacterons sous peu.`
-    );
+  try {
+    const commandeDoc = await db.collection('commandes').doc(commandeId).get();
+    if (!commandeDoc.exists) return;
+    
+    const commande = commandeDoc.data();
+    
+    if (validee) {
+      await sendTextMessage(commande.client.telephone,
+        `✅ **Ordonnance validée!**\n\n` +
+        `Votre ordonnance a été validée par la pharmacie ${commande.pharmacieNom}.\n\n` +
+        `Un livreur va être assigné à votre commande.\n\n` +
+        `Merci pour votre patience.`
+      );
+    } else {
+      await sendTextMessage(commande.client.telephone,
+        `❌ **Ordonnance refusée**\n\n` +
+        `La pharmacie a refusé votre ordonnance.\n\n` +
+        `Nous transférons votre commande à une autre pharmacie de garde.\n\n` +
+        `Nous vous recontacterons sous peu.`
+      );
+    }
+  } catch (error) {
+    console.error("Erreur notification validation ordonnance:", error);
   }
 }
 
 async function notifierAnnulationCommande(commandeId, raison) {
-  const commandeDoc = await db.collection('commandes').doc(commandeId).get();
-  if (!commandeDoc.exists) return;
-  
-  const commande = commandeDoc.data();
-  
-  await sendTextMessage(commande.client.telephone,
-    `❌ **Commande annulée**\n\n` +
-    `Votre commande #${commandeId.substring(0, 8)} a été annulée.\n\n` +
-    `Raison: ${raison}\n\n` +
-    `Nous sommes désolés pour ce désagrément.\n` +
-    `📞 Contactez-nous: ${CONFIG.SUPPORT_PHONE}`
-  );
+  try {
+    const commandeDoc = await db.collection('commandes').doc(commandeId).get();
+    if (!commandeDoc.exists) return;
+    
+    const commande = commandeDoc.data();
+    
+    await sendTextMessage(commande.client.telephone,
+      `❌ **Commande annulée**\n\n` +
+      `Votre commande #${commandeId.substring(0, 8)} a été annulée.\n\n` +
+      `Raison: ${raison}\n\n` +
+      `Nous sommes désolés pour ce désagrément.\n` +
+      `📞 Contactez-nous: ${CONFIG.SUPPORT_PHONE}`
+    );
+  } catch (error) {
+    console.error("Erreur notification annulation:", error);
+  }
 }
 
 async function demanderNotationService(commandeId) {
-  const commandeDoc = await db.collection('commandes').doc(commandeId).get();
-  if (!commandeDoc.exists) return;
-  
-  const commande = commandeDoc.data();
-  
-  const buttons = [
-    { type: "reply", reply: { id: `note_5_${commandeId}`, title: "⭐ 5/5" } },
-    { type: "reply", reply: { id: `note_4_${commandeId}`, title: "⭐ 4/5" } },
-    { type: "reply", reply: { id: `note_3_${commandeId}`, title: "⭐ 3/5" } },
-    { type: "reply", reply: { id: `note_2_${commandeId}`, title: "⭐ 2/5" } },
-    { type: "reply", reply: { id: `note_1_${commandeId}`, title: "⭐ 1/5" } }
-  ];
-  
-  await sendInteractiveMessage(commande.client.telephone,
-    `⭐ **NOTER LE SERVICE**\n\n` +
-    `Comment évaluez-vous la livraison de votre commande ?\n\n` +
-    `Votre avis nous aide à améliorer Pillbox!`,
-    buttons
-  );
+  try {
+    const commandeDoc = await db.collection('commandes').doc(commandeId).get();
+    if (!commandeDoc.exists) return;
+    
+    const commande = commandeDoc.data();
+    
+    const buttons = [
+      { type: "reply", reply: { id: `note_5_${commandeId}`, title: "⭐ 5/5" } },
+      { type: "reply", reply: { id: `note_4_${commandeId}`, title: "⭐ 4/5" } },
+      { type: "reply", reply: { id: `note_3_${commandeId}`, title: "⭐ 3/5" } },
+      { type: "reply", reply: { id: `note_2_${commandeId}`, title: "⭐ 2/5" } },
+      { type: "reply", reply: { id: `note_1_${commandeId}`, title: "⭐ 1/5" } }
+    ];
+    
+    await sendInteractiveMessage(commande.client.telephone,
+      `⭐ **NOTER LE SERVICE**\n\n` +
+      `Comment évaluez-vous la livraison de votre commande ?\n\n` +
+      `Votre avis nous aide à améliorer Pillbox!`,
+      buttons
+    );
+  } catch (error) {
+    console.error("Erreur demande notation:", error);
+  }
 }
 
 async function enregistrerNote(commandeId, note, telephoneClient) {
@@ -2638,6 +2806,8 @@ ${requiredVars.map(varName =>
   `  ${process.env[varName] ? '✅' : '❌'} ${varName}: ${process.env[varName] ? 'Défini' : 'MANQUANT'}`
 ).join('\n')}
 =======================================
+Statut Firebase: ${firebaseInitialized ? '✅ Connecté' : '⚠️ Mode simulation'}
+=======================================
   `);
 });
 
@@ -2649,6 +2819,7 @@ app.get('/health', (req, res) => {
     service: 'Pillbox WhatsApp Bot PRODUCTION',
     version: '1.0.0',
     users_actifs: userStates.size,
+    firebase_connected: firebaseInitialized,
     creators: ['Yousself Diabaté', 'Bossé Toh Delphin']
   });
 });
@@ -2659,23 +2830,51 @@ app.get('/admin', (req, res) => {
       <head>
         <title>Pillbox Admin</title>
         <style>
-          body { font-family: Arial, sans-serif; padding: 20px; }
-          .card { border: 1px solid #ddd; padding: 20px; margin: 10px 0; border-radius: 5px; }
+          body { font-family: Arial, sans-serif; padding: 20px; background: #f5f5f5; }
+          .container { max-width: 800px; margin: 0 auto; }
+          .card { background: white; border-radius: 10px; padding: 20px; margin: 20px 0; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+          .status { display: inline-block; padding: 5px 10px; border-radius: 5px; font-weight: bold; }
+          .status-ok { background: #4CAF50; color: white; }
+          .status-warning { background: #FF9800; color: white; }
+          .status-error { background: #F44336; color: white; }
+          h1 { color: #333; }
         </style>
       </head>
       <body>
-        <h1>💊 Pillbox Administration</h1>
-        <div class="card">
-          <h2>📊 Statistiques</h2>
-          <p>Utilisateurs actifs: ${userStates.size}</p>
-        </div>
-        <div class="card">
-          <h2>👨‍💻 Créateurs</h2>
-          <p><strong>Yousself Diabaté</strong> - Développeur Full-Stack</p>
-          <p><strong>Bossé Toh Delphin</strong> - Architecte Solution & Gestion de projet</p>
-          <p>Université Polytechnique de San Pedro, Côte d'Ivoire</p>
+        <div class="container">
+          <h1>💊 Pillbox Administration</h1>
+          
+          <div class="card">
+            <h2>📊 Statistiques</h2>
+            <p>Utilisateurs actifs: ${userStates.size}</p>
+            <p>Firebase: <span class="status ${firebaseInitialized ? 'status-ok' : 'status-warning'}">${firebaseInitialized ? 'CONNECTÉ' : 'MODE SIMULATION'}</span></p>
+          </div>
+          
+          <div class="card">
+            <h2>👨‍💻 Créateurs</h2>
+            <p><strong>Yousself Diabaté</strong> - Développeur Full-Stack</p>
+            <p><strong>Bossé Toh Delphin</strong> - Architecte Solution & Gestion de projet</p>
+            <p>Université Polytechnique de San Pedro, Côte d'Ivoire</p>
+          </div>
+          
+          <div class="card">
+            <h2>🔧 Endpoints API</h2>
+            <p><strong>Health Check:</strong> <code>/health</code></p>
+            <p><strong>Webhook WhatsApp:</strong> <code>/api/webhook</code></p>
+            <p><strong>Admin:</strong> <code>/admin</code></p>
+          </div>
         </div>
       </body>
     </html>
   `);
+});
+
+// Gestion des erreurs non catchées
+process.on('uncaughtException', (error) => {
+  console.error('💥 ERREUR NON GÉRÉE:', error.message);
+  console.error('Stack:', error.stack);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('💥 PROMISE REJECTION NON GÉRÉE:', reason);
 });
