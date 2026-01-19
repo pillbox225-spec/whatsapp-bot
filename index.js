@@ -10,7 +10,7 @@ const CONFIG = {
   PHONE_NUMBER_ID: process.env.PHONE_NUMBER_ID,
   WHATSAPP_TOKEN: process.env.WHATSAPP_TOKEN,
   GROQ_API_KEY: process.env.GROQ_API_KEY,
-  GROQ_MODEL: "llama3-8b-8192"  // Modèle gratuit et rapide
+  GROQ_MODEL: "llama-3.1-8b-instant"  // Modèle gratuit et rapide
 };
 
 // Cache pour éviter les appels répétitifs (optionnel mais recommandé)
