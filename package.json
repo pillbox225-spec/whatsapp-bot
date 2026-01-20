@@ -1,25 +1,18 @@
 {
   "name": "pillbox-whatsapp-bot",
   "version": "1.0.0",
-  "description": "Pillbox - Service WhatsApp de commande de médicaments à San Pedro",
+  "description": "Bot WhatsApp pour la gestion des pharmacies, centres de santé et commandes de médicaments",
   "main": "index.js",
-  "type": "commonjs",
   "scripts": {
     "start": "node index.js",
     "dev": "nodemon index.js"
   },
-  "keywords": ["whatsapp", "bot", "pharmacie", "medicaments", "san-pedro"],
-  "author": "Yousself Diabaté & Bossé Toh Delphin",
-  "license": "MIT",
   "dependencies": {
-    "express": "^4.18.2",
     "axios": "^1.6.2",
-    "firebase-admin": "^11.11.0",
-    "uuid": "^9.0.0",
-    "protobufjs": "^7.2.5",
-    "@grpc/grpc-js": "^1.9.12",
-    "@grpc/proto-loader": "^0.7.10",
-    "google-gax": "^4.0.7"
+    "express": "^4.18.2",
+    "firebase-admin": "^11.11.1",
+    "fuse.js": "^6.6.2",
+    "uuid": "^9.0.1"
   },
   "engines": {
     "node": ">=18.0.0"
