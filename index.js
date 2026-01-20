@@ -3,20 +3,20 @@ const axios = require('axios');
 const admin = require('firebase-admin');
 const { v4: uuidv4 } = require('uuid');
 const path = require('path');
-const fs = require('fs').promises;
 
+// Initialisation de l'application Express
 const app = express();
 app.use(express.json());
 
 // ==================== INITIALISATION FIREBASE ====================
-console.log('🔧 Initialisation Firebase...');
 let db;
 let FieldValue;
 
+// Initialisation de Firebase Admin SDK
 (async () => {
   try {
     if (admin.apps.length === 0) {
-      if (!process.env.FIREBASE_PROJECT_ID || !process.env.FIREBASE_SERVICE_ACCOUNT_KEY) {
+      if (!process.env.FIREBASE_SERVICE_ACCOUNT_KEY || !process.env.FIREBASE_PROJECT_ID) {
         throw new Error("Variables Firebase manquantes");
       }
 
@@ -31,8 +31,10 @@ let FieldValue;
 
     db = admin.firestore();
     FieldValue = admin.firestore.FieldValue;
-    console.log('🔍 Test de connexion Firestore...');
-    await db.collection('system_health').doc('connection_test').set({
+
+    // Test de connexion à Firestore
+    const testRef = db.collection('system_health').doc('connection_test');
+    await testRef.set({
       timestamp: new Date().toISOString(),
       status: 'connected'
     });
@@ -459,6 +461,62 @@ const livreurManager = {
     } catch (error) {
       console.error("Erreur recherche autre livreur:", error);
     }
+  },
+
+  async envoyerBoutonsActionLivreur(telephoneLivreur, commande) {
+    try {
+      const message = `✅ **Commande acceptée!**\n\n` +
+        `Commande #${commande.id.substring(0, 8)}\n\n` +
+        `🎯 **ÉTAPES:**\n` +
+        `1. Récupérer à la pharmacie\n` +
+        `2. Livrer au client\n\n` +
+        `Cliquez sur les boutons ci-dessous pour chaque étape:`;
+      const buttons = [
+        { type: "reply", reply: { id: `aller_recuperer_${commande.id}`, title: "🏥 Aller récupérer" } },
+        { type: "reply", reply: { id: `deja_recupere_${commande.id}`, title: "✅ Déjà récupéré" } },
+        { type: "reply", reply: { id: `contacter_pharmacie_${commande.id}`, title: "📞 Contacter pharmacie" } }
+      ];
+      await sendInteractiveMessage(telephoneLivreur, message, buttons);
+    } catch (error) {
+      console.error("Erreur envoi boutons action:", error);
+    }
+  },
+
+  async handleChatClientLivreur(message, from, to) {
+    try {
+      const commandesSnapshot = await db.collection('commandes')
+        .where('chatActive', '==', true)
+        .get();
+
+      for (const doc of commandesSnapshot.docs) {
+        const commande = doc.data();
+        const isClient = from === commande.client.telephone;
+        const isLivreur = from === commande.livreurTelephone;
+
+        if (isClient || isLivreur) {
+          const destinataire = isClient ? commande.livreurTelephone : commande.client.telephone;
+          const expediteurNom = isClient ? commande.client.nom : commande.livreurNom;
+
+          await db.collection('chats').add({
+            commandeId: doc.id,
+            expediteur: from,
+            destinataire: destinataire,
+            expediteurNom: expediteurNom,
+            message: message,
+            timestamp: Date.now(),
+            type: 'text'
+          });
+
+          const prefix = isClient ? '👤 Client: ' : '🚗 Livreur: ';
+          await sendTextMessage(destinataire, `${prefix}${message}`);
+          return true;
+        }
+      }
+      return false;
+    } catch (error) {
+      console.error("Erreur gestion chat:", error);
+      return false;
+    }
   }
 };
 
@@ -884,8 +942,8 @@ async function handleTextMessage(from, text, userState) {
   if (!userState.initialized) {
     await sendTypingIndicator(from, 1500);
     const welcomeButtons = [
-      { type: "reply", reply: { id: "commencer_commande", title: "💊 Commander maintenant" } },
-      { type: "reply", reply: { id: "ouvrir_support", title: "📞 Contacter le support" } }
+      { type: "reply", reply: { id: "commencer_commande", title: "💊 Commander" } },
+      { type: "reply", reply: { id: "ouvrir_support", title: "📞 Support" } }
     ];
     await sendInteractiveMessage(from,
       "💊 **Bonjour, je suis Mia de Pillbox!** 🤖\n\n" +
@@ -949,9 +1007,9 @@ async function analyserImageMedicament(from, imageUrl, userState) {
     await sendTypingIndicator(from, 4000);
     const aiResponse = "📸 **Médicament identifié:**\nParacétamol 500mg\n\n💊 **Catégorie:** Douleurs-Fièvre\n📋 **Ordonnance:** Non requise\n⚠️ **Conseil:** 1 comprimé toutes les 6 heures\n\nQue souhaitez-vous faire ?";
     const buttons = [
-      { type: "reply", reply: { id: "rechercher_medicament", title: "🔍 Rechercher ce médicament" } },
-      { type: "reply", reply: { id: "commander_sans_ordonnance", title: "💊 Commander (sans ordonnance)" } },
-      { type: "reply", reply: { id: "retour_menu", title: "🔙 Retour menu" } }
+      { type: "reply", reply: { id: "rechercher_medicament", title: "🔍 Rechercher" } },
+      { type: "reply", reply: { id: "commander_sans_ordonnance", title: "💊 Commander" } },
+      { type: "reply", reply: { id: "retour_menu", title: "🔙 Retour" } }
     ];
     await sendInteractiveMessage(from, aiResponse, buttons);
   } catch (error) {
@@ -1078,7 +1136,7 @@ async function handleInteractiveMessage(from, buttonId, userState) {
       await sendTextMessage(from, result.message);
       const buttons = [
         { type: "reply", reply: { id: "continuer_achats", title: "🛒 Continuer" } },
-        { type: "reply", reply: { id: "valider_panier", title: "✅ Valider panier" } }
+        { type: "reply", reply: { id: "valider_panier", title: "✅ Valider" } }
       ];
       await sendInteractiveMessage(from, "Que souhaitez-vous faire ?", buttons);
     } else {
@@ -1095,8 +1153,8 @@ async function handleInteractiveMessage(from, buttonId, userState) {
     await handleMenuPrincipal(from, userState);
   } else if (buttonId === 'commander_sans_ordonnance') {
     const buttons = [
-      { type: "reply", reply: { id: "confirmer_sans_ordonnance", title: "✅ Oui, continuer" } },
-      { type: "reply", reply: { id: "annuler_commande", title: "❌ Non, annuler" } }
+      { type: "reply", reply: { id: "confirmer_sans_ordonnance", title: "✅ Oui" } },
+      { type: "reply", reply: { id: "annuler_commande", title: "❌ Non" } }
     ];
     await sendInteractiveMessage(from,
       "⚠️ **ATTENTION - Médicaments sous ordonnance**\n\n" +
@@ -1125,16 +1183,30 @@ async function handleInteractiveMessage(from, buttonId, userState) {
   }
 }
 
+// ==================== FONCTIONS WHATSAPP UTILITAIRES ====================
+async function getWhatsAppMediaUrl(mediaId) {
+  try {
+    const response = await axios.get(
+      `https://graph.facebook.com/v19.0/${mediaId}`,
+      { headers: { 'Authorization': `Bearer ${CONFIG.WHATSAPP_TOKEN}` } }
+    );
+    return response.data.url;
+  } catch (error) {
+    console.error('Erreur récupération média:', error.message);
+    return null;
+  }
+}
+
 // ==================== MENUS PRINCIPAUX ====================
 async function handleMenuPrincipal(userId, userState) {
   const panierCount = userState.panier.length;
   const buttons = [
-    { type: "reply", reply: { id: "commander_sans_ordonnance", title: "💊 Commander sans ordonnance" } },
-    { type: "reply", reply: { id: "commander_avec_ordonnance", title: "📋 Commander avec ordonnance" } },
-    { type: "reply", reply: { id: "chercher_medicament", title: "🔍 Chercher médicament" } },
-    { type: "reply", reply: { id: "pharmacies_garde", title: "🏥 Pharmacies de garde" } },
+    { type: "reply", reply: { id: "commander_sans_ordonnance", title: "💊 Commander" } },
+    { type: "reply", reply: { id: "commander_avec_ordonnance", title: "📋 Ordonnance" } },
+    { type: "reply", reply: { id: "chercher_medicament", title: "🔍 Chercher" } },
+    { type: "reply", reply: { id: "pharmacies_garde", title: "🏥 Pharmacies" } },
     { type: "reply", reply: { id: "mon_panier", title: `🛒 Panier (${panierCount})` } },
-    { type: "reply", reply: { id: "suivi_commandes", title: "📦 Suivi commandes" } }
+    { type: "reply", reply: { id: "suivi_commandes", title: "📦 Suivi" } }
   ];
   await sendInteractiveMessage(userId,
     "**💊 Menu Principal - Pillbox**\n\n" +
@@ -1165,8 +1237,8 @@ async function handlePharmaciesDeGarde(userId) {
   message += "• Présentez votre ordonnance si nécessaire\n";
   message += "• Service de livraison disponible via Pillbox\n\n";
   const buttons = [
-    { type: "reply", reply: { id: "chercher_medicament", title: "🔍 Chercher médicament" } },
-    { type: "reply", reply: { id: "commander_avec_ordonnance", title: "📋 Commander maintenant" } },
+    { type: "reply", reply: { id: "chercher_medicament", title: "🔍 Chercher" } },
+    { type: "reply", reply: { id: "commander_avec_ordonnance", title: "📋 Commander" } },
     { type: "reply", reply: { id: "retour_menu", title: "🔙 Retour" } }
   ];
   await sendInteractiveMessage(userId, message, buttons);
@@ -1174,8 +1246,8 @@ async function handlePharmaciesDeGarde(userId) {
 
 async function handleChercherMedicament(userId, userState) {
   const buttons = [
-    { type: "reply", reply: { id: "recherche_nom", title: "🔍 Rechercher par nom" } },
-    { type: "reply", reply: { id: "envoyer_photo_medicament", title: "📸 Photo médicament" } },
+    { type: "reply", reply: { id: "recherche_nom", title: "🔍 Par nom" } },
+    { type: "reply", reply: { id: "envoyer_photo_medicament", title: "📸 Par photo" } },
     { type: "reply", reply: { id: "retour_menu", title: "🔙 Retour" } }
   ];
   await sendInteractiveMessage(userId,
@@ -1195,7 +1267,7 @@ async function handleRechercheParCategorie(userId, userState) {
       await sendTextMessage(userId, "❌ Aucune catégorie disponible pour le moment.");
       return;
     }
-    let message = "🏷️ **Catégories de médicaments disponibles**\n\n";
+    let message = "🏷️ **Catégories de médicaments**\n\n";
     const categoriesLimitees = categories.slice(0, 10);
     const buttons = categoriesLimitees.map((categorie, index) => ({
       type: "reply",
@@ -1266,8 +1338,8 @@ async function handleRechercheNom(userId, recherche, userState) {
       `Ou retournez au menu principal :`
     );
     const buttons = [
-      { type: "reply", reply: { id: "recherche_categorie", title: "🏷️ Recherche par catégorie" } },
-      { type: "reply", reply: { id: "envoyer_photo_medicament", title: "📸 Photo médicament" } },
+      { type: "reply", reply: { id: "recherche_categorie", title: "🏷️ Catégories" } },
+      { type: "reply", reply: { id: "envoyer_photo_medicament", title: "📸 Photo" } },
       { type: "reply", reply: { id: "retour_menu", title: "🔙 Retour" } }
     ];
     await sendInteractiveMessage(userId, "Que souhaitez-vous faire ?", buttons);
@@ -1299,8 +1371,8 @@ async function handlePanier(userId, userState) {
   }
   const message = await panierManager.afficherPanier(userId);
   const buttons = [
-    { type: "reply", reply: { id: "valider_panier", title: "✅ Valider panier" } },
-    { type: "reply", reply: { id: "vider_panier", title: "🗑️ Vider panier" } },
+    { type: "reply", reply: { id: "valider_panier", title: "✅ Valider" } },
+    { type: "reply", reply: { id: "vider_panier", title: "🗑️ Vider" } },
     { type: "reply", reply: { id: "retour_menu", title: "🔙 Retour" } }
   ];
   await sendInteractiveMessage(userId, message, buttons);
@@ -1342,12 +1414,12 @@ async function showDetailMedicament(userId, medicamentId, userState) {
     const buttons = [];
     if (medicament.necessiteOrdonnance) {
       if (userState.ordonnanceValidee) {
-        buttons.push({ type: "reply", reply: { id: `ajouter_${medicamentId}`, title: "🛒 Ajouter au panier" } });
+        buttons.push({ type: "reply", reply: { id: `ajouter_${medicamentId}`, title: "🛒 Ajouter" } });
       } else {
-        buttons.push({ type: "reply", reply: { id: `demander_ordonnance_${medicamentId}`, title: "📸 Envoyer ordonnance" } });
+        buttons.push({ type: "reply", reply: { id: `demander_ordonnance_${medicamentId}`, title: "📸 Ordonnance" } });
       }
     } else {
-      buttons.push({ type: "reply", reply: { id: `ajouter_${medicamentId}`, title: "🛒 Ajouter au panier" } });
+      buttons.push({ type: "reply", reply: { id: `ajouter_${medicamentId}`, title: "🛒 Ajouter" } });
     }
     buttons.push({ type: "reply", reply: { id: "retour_menu", title: "🔙 Retour" } });
     await sendInteractiveMessage(userId, message, buttons);
@@ -1406,19 +1478,6 @@ async function traiterInfosLivraison(userId, texte, userState) {
     await livreurManager.envoyerCommandeLivreur(commandeId, userState.pharmacieId);
   }
   userStates.set(userId, { ...DEFAULT_STATE, initialized: true });
-}
-
-async function getWhatsAppMediaUrl(mediaId) {
-  try {
-    const response = await axios.get(
-      `https://graph.facebook.com/v19.0/${mediaId}`,
-      { headers: { 'Authorization': `Bearer ${CONFIG.WHATSAPP_TOKEN}` } }
-    );
-    return response.data.url;
-  } catch (error) {
-    console.error('Erreur récupération média:', error.message);
-    return null;
-  }
 }
 
 // ==================== WEBHOOK ====================
