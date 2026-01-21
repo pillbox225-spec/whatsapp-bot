@@ -4,7 +4,7 @@ const axios = require('axios');
 const admin = require('firebase-admin');
 const { v4: uuidv4 } = require('uuid');
 const Fuse = require('fuse.js');
-const { vision } = require('@google-cloud/vision');
+const { ImageAnnotatorClient } = require('@google-cloud/vision');
 
 // Initialisation Express
 const app = express();
@@ -91,7 +91,7 @@ const DEFAULT_STATE = {
 };
 
 // Client Google Vision pour OCR
-const clientVision = new vision.ImageAnnotatorClient({
+const clientVision = new ImageAnnotatorClient({
   keyFilename: process.env.GOOGLE_APPLICATION_CREDENTIALS
 });
 
