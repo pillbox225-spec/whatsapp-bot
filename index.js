@@ -421,6 +421,7 @@ function getFraisLivraison() {
 // Module Livreurs
 const livreurManager = {
   RAPPEL_LIVRAISON_MS: 5 * 60 * 1000,
+
   async envoyerCommandeLivreur(commandeId, pharmacieId) {
     try {
       const livreurs = await getLivreursDisponibles();
@@ -453,7 +454,200 @@ const livreurManager = {
       return { success: false, message: error.message };
     }
   },
-  // ... (le reste des méthodes de livreurManager)
+
+  creerMessageLivreurDetaille(commande, pharmacie, livreur) {
+    const client = commande.client;
+    const montantTotal = commande.montantTotal + commande.fraisLivraison;
+    const positionPharmacie = pharmacie.position;
+    const positionClient = commande.livraison;
+    const lienGoogleMapsPharmacie = `https://www.google.com/maps?q=${positionPharmacie.latitude},${positionPharmacie.longitude}`;
+    const lienGoogleMapsClient = `https://www.google.com/maps?q=${positionClient.latitude},${positionClient.longitude}`;
+    const lienTrajetPharmacieClient = `https://www.google.com/maps/dir/${positionPharmacie.latitude},${positionPharmacie.longitude}/${positionClient.latitude},${positionClient.longitude}/`;
+    return `📦 **NOUVELLE COMMANDE PILLBOX**\n\n` +
+           `🆔 Commande: #${commande.id.substring(0, 8)}\n` +
+           `💰 Montant: ${montantTotal} FCFA\n` +
+           `🚚 Frais livraison: ${commande.fraisLivraison} FCFA\n\n` +
+           `🏥 **PHARMACIE À VISITER**\n` +
+           `• Nom: ${pharmacie.nom}\n` +
+           `• Tél: ${pharmacie.telephone}\n` +
+           `• Adresse: ${pharmacie.adresse || 'BP 225'}\n` +
+           `• Horaires: ${pharmacie.horaires || '24h/24'}\n` +
+           `📍 Localisation: ${lienGoogleMapsPharmacie}\n\n` +
+           `👤 **CLIENT À LIVRER**\n` +
+           `• Nom: ${client.nom}\n` +
+           `• WhatsApp: ${client.whatsapp}\n` +
+           `• À joindre: ${client.aJoindre}\n` +
+           `• Quartier: ${commande.livraison.quartier}\n` +
+           `• Indications: ${commande.livraison.indications}\n` +
+           `📍 Localisation: ${lienGoogleMapsClient}\n\n` +
+           `🛣️ **TRAJET COMPLET**\n` +
+           `Votre position → Pharmacie → Client\n` +
+           `📍 Voir le trajet: ${lienTrajetPharmacieClient}\n\n` +
+           `💬 **COMMUNICATION**\n` +
+           `• Pour contacter la pharmacie: ${pharmacie.telephone}\n` +
+           `• Pour contacter le client: ${client.aJoindre}\n\n` +
+           `⏰ **À livrer dans les plus brefs délais**`;
+  },
+
+  async envoyerMessageLivreurAmeliore(telephoneLivreur, message, commandeId, pharmacie) {
+    try {
+      const buttons = [
+        { type: "reply", reply: { id: `accepter_${commandeId}`, title: "✅ Accepter" } },
+        { type: "reply", reply: { id: `refuser_${commandeId}`, title: "❌ Refuser" } }
+      ];
+      await sendInteractiveMessage(telephoneLivreur, message, buttons);
+      setTimeout(async () => { await this.verifierReponseLivreur(commandeId); }, this.RAPPEL_LIVRAISON_MS);
+    } catch (error) {
+      console.error("Erreur envoi message livreur:", error);
+    }
+  },
+
+  async verifierReponseLivreur(commandeId) {
+    try {
+      const commandeDoc = await db.collection('commandes').doc(commandeId).get();
+      if (!commandeDoc.exists) return;
+      const commande = commandeDoc.data();
+      if (commande.statut === 'en_attente_livreur') {
+        await sendTextMessage(commande.livreurTelephone, `⏰ **RAPPEL - Commande #${commandeId.substring(0, 8)}**\n\nVeuillez accepter ou refuser cette commande.`);
+        await db.collection('commandes').doc(commandeId).update({ rappelEnvoye: true, dateRappel: Date.now() });
+      }
+    } catch (error) {
+      console.error("Erreur vérification réponse livreur:", error);
+    }
+  },
+
+  async handleReponseLivreur(telephoneLivreur, buttonId, commandeId, reponse) {
+    try {
+      const commandeDoc = await db.collection('commandes').doc(commandeId).get();
+      if (!commandeDoc.exists) return;
+      const commande = commandeDoc.data();
+      if (reponse === 'accepter') {
+        await db.collection('commandes').doc(commandeId).update({
+          statut: 'en_cours_livraison',
+          livreurAccepte: true,
+          dateAcceptation: Date.now(),
+          'essaisLivreurs.0.statut': 'accepte'
+        });
+        await this.notifierClientLivraisonEnCours(commande);
+        await this.envoyerBoutonsActionLivreur(telephoneLivreur, commande);
+      } else if (reponse === 'refuser') {
+        await db.collection('commandes').doc(commandeId).update({
+          livreurAccepte: false,
+          livreurRefuse: true,
+          dateRefus: Date.now(),
+          'essaisLivreurs.0.statut': 'refuse'
+        });
+        await sendTextMessage(telephoneLivreur, `❌ **Commande refusée.**\n\nNous allons contacter un autre livreur.`);
+        await this.trouverAutreLivreur(commandeId);
+      }
+    } catch (error) {
+      console.error("Erreur gestion réponse livreur:", error);
+    }
+  },
+
+  async notifierClientLivraisonEnCours(commande) {
+    try {
+      await sendTextMessage(commande.client.telephone,
+        `🚗 **LIVRAISON EN COURS, ${commande.client.nom || "vous"}!**\n\n` +
+        `Votre commande #${commande.id.substring(0, 8)} a été acceptée par un livreur.\n\n` +
+        `👤 **Votre livreur:**\n` +
+        `• Nom: ${commande.livreurNom}\n` +
+        `• Tél: ${commande.livreurTelephone}\n\n` +
+        `🏥 **Pharmacie:** ${commande.pharmacieNom}\n\n` +
+        `💬 **Communiquez avec votre livreur** directement sur WhatsApp:\n` +
+        `👉 [Ouvrir la conversation](https://wa.me/${commande.livreurTelephone.replace('+', '')})\n\n` +
+        `📱 Ou répondez à ce message (il sera transféré au livreur).`
+      );
+    } catch (error) {
+      console.error("Erreur notification client:", error);
+    }
+  },
+
+  async trouverAutreLivreur(commandeId) {
+    try {
+      const commandeDoc = await db.collection('commandes').doc(commandeId).get();
+      if (!commandeDoc.exists) return;
+      const commande = commandeDoc.data();
+      const essaisLivreurs = commande.essaisLivreurs || [];
+      const livreursContactes = essaisLivreurs.map(e => e.livreurId);
+      const tousLivreurs = await getLivreursDisponibles();
+      const nouveauLivreur = tousLivreurs.find(l => !livreursContactes.includes(l.telephone));
+      if (nouveauLivreur) {
+        const nouveauxEssais = [...essaisLivreurs, { livreurId: nouveauLivreur.telephone, date: Date.now(), statut: 'en_attente' }];
+        await db.collection('commandes').doc(commandeId).update({
+          livreurId: nouveauLivreur.telephone,
+          livreurNom: `${nouveauLivreur.prenom} ${nouveauLivreur.nom}`,
+          livreurTelephone: nouveauLivreur.telephone,
+          essaisLivreurs: nouveauxEssais
+        });
+        await this.envoyerCommandeLivreur(commandeId, commande.pharmacieId);
+      } else {
+        await db.collection('commandes').doc(commandeId).update({
+          statut: 'annulee',
+          raisonAnnulation: 'Aucun livreur disponible'
+        });
+        await sendTextMessage(commande.client.telephone,
+          `❌ **Commande annulée, ${commande.client.nom || "vous"}**\n\n` +
+          `Aucun livreur disponible pour le moment.\n\n` +
+          `Veuillez réessayer plus tard ou contacter le support: ${CONFIG.SUPPORT_PHONE}`
+        );
+      }
+    } catch (error) {
+      console.error("Erreur recherche autre livreur:", error);
+    }
+  },
+
+  async envoyerBoutonsActionLivreur(telephoneLivreur, commande) {
+    try {
+      const message = `✅ **Commande acceptée!**\n\n` +
+        `Commande #${commande.id.substring(0, 8)}\n\n` +
+        `🎯 **ÉTAPES:**\n` +
+        `1. Récupérer à la pharmacie\n` +
+        `2. Livrer au client\n\n` +
+        `Cliquez sur les boutons ci-dessous pour chaque étape:`;
+      const buttons = [
+        { type: "reply", reply: { id: `aller_recuperer_${commande.id}`, title: "🏥 Aller récupérer" } },
+        { type: "reply", reply: { id: `deja_recupere_${commande.id}`, title: "✅ Déjà récupéré" } },
+        { type: "reply", reply: { id: `contacter_pharmacie_${commande.id}`, title: "📞 Contacter pharmacie" } }
+      ];
+      await sendInteractiveMessage(telephoneLivreur, message, buttons);
+    } catch (error) {
+      console.error("Erreur envoi boutons action:", error);
+    }
+  },
+
+  async handleChatClientLivreur(message, from, to) {
+    try {
+      const commandesSnapshot = await db.collection('commandes')
+        .where('chatActive', '==', true)
+        .get();
+      for (const doc of commandesSnapshot.docs) {
+        const commande = doc.data();
+        const isClient = from === commande.client.telephone;
+        const isLivreur = from === commande.livreurTelephone;
+        if (isClient || isLivreur) {
+          const destinataire = isClient ? commande.livreurTelephone : commande.client.telephone;
+          const expediteurNom = isClient ? commande.client.nom : commande.livreurNom;
+          await db.collection('chats').add({
+            commandeId: doc.id,
+            expediteur: from,
+            destinataire: destinataire,
+            expediteurNom: expediteurNom,
+            message: message,
+            timestamp: Date.now(),
+            type: 'text'
+          });
+          const prefix = isClient ? '👤 Client: ' : '🚗 Livreur: ';
+          await sendTextMessage(destinataire, `${prefix}${message}`);
+          return true;
+        }
+      }
+      return false;
+    } catch (error) {
+      console.error("Erreur gestion chat:", error);
+      return false;
+    }
+  }
 };
 
 // Module Validation Pharmacie
@@ -478,7 +672,130 @@ const pharmacieValidator = {
       return { success: false, message: error.message };
     }
   },
-  // ... (le reste des méthodes de pharmacieValidator)
+
+  creerMessageValidation(commandeId, photoUrl) {
+    return `🏥 **VALIDATION D'ORDONNANCE**\n\n` +
+           `Une nouvelle ordonnance nécessite votre validation.\n\n` +
+           `🆔 Commande: #${commandeId.substring(0, 8)}\n\n` +
+           `Veuillez vérifier l'ordonnance ci-jointe et valider ou refuser la commande.`;
+  },
+
+  async envoyerMessagePharmacie(telephonePharmacie, message, photoUrl, commandeId) {
+    try {
+      await axios.post(
+        `https://graph.facebook.com/v19.0/${CONFIG.PHONE_NUMBER_ID}/messages`,
+        {
+          messaging_product: "whatsapp",
+          recipient_type: "individual",
+          to: telephonePharmacie,
+          type: "image",
+          image: { link: photoUrl, caption: "📋 Ordonnance du client" }
+        },
+        { headers: { 'Authorization': `Bearer ${CONFIG.WHATSAPP_TOKEN}`, 'Content-Type': 'application/json' } }
+      );
+      const buttons = [
+        { type: "reply", reply: { id: `valider_ordonnance_${commandeId}`, title: "✅ Valider" } },
+        { type: "reply", reply: { id: `refuser_ordonnance_${commandeId}`, title: "❌ Refuser" } }
+      ];
+      await sendInteractiveMessage(telephonePharmacie, message, buttons);
+    } catch (error) {
+      console.error("Erreur envoi message pharmacie:", error);
+    }
+  },
+
+  async handleReponsePharmacie(telephonePharmacie, buttonId, commandeId, reponse) {
+    try {
+      const commandeDoc = await db.collection('commandes').doc(commandeId).get();
+      if (!commandeDoc.exists) return;
+      const commande = commandeDoc.data();
+      if (reponse === 'valider') {
+        await db.collection('commandes').doc(commandeId).update({
+          statut: 'ordonnance_validee',
+          ordonnanceValidee: true,
+          pharmacieValidee: true,
+          dateValidation: Date.now()
+        });
+        await sendTextMessage(commande.client.telephone,
+          `✅ **Ordonnance validée, ${commande.client.nom || "vous"}!**\n\n` +
+          `Votre ordonnance a été validée par la pharmacie **${commande.pharmacieNom}**.` +
+          `\n\nPour finaliser votre commande, nous avons besoin de vos informations de livraison :` +
+          `\n\n1. **Votre nom et prénom**` +
+          `\n2. **Votre quartier**` +
+          `\n3. **Votre numéro WhatsApp**` +
+          `\n4. **Un numéro à joindre** (pour le livreur)` +
+          `\n5. **Indications pour trouver l’emplacement**` +
+          `\n\n📝 **Format attendu** :` +
+          `\nNom: [votre nom]` +
+          `\nQuartier: [votre quartier]` +
+          `\nWhatsApp: [votre numéro]` +
+          `\nÀ joindre: [numéro]` +
+          `\nIndications: [détails]` +
+          `\n\nEnvoyez ces informations pour que nous puissions organiser la livraison.`
+        );
+        const userState = userStates.get(commande.client.telephone) || { ...DEFAULT_STATE };
+        userState.step = 'ATTENTE_INFOS_LIVRAISON_ORDONNANCE';
+        userState.commandeEnCours = commandeId;
+        userStates.set(commande.client.telephone, userState);
+      } else if (reponse === 'refuser') {
+        await db.collection('commandes').doc(commandeId).update({
+          statut: 'ordonnance_refusee',
+          ordonnanceValidee: false,
+          pharmacieValidee: false,
+          dateRefus: Date.now()
+        });
+        await sendTextMessage(commande.client.telephone,
+          `❌ **Ordonnance refusée, ${commande.client.nom || "vous"}**\n\n` +
+          `La pharmacie a refusé votre ordonnance.\n\n` +
+          `Nous transférons votre commande à une autre pharmacie de garde.\n\n` +
+          `Nous vous recontacterons sous peu.`
+        );
+        await this.trouverAutrePharmacie(commandeId);
+      }
+    } catch (error) {
+      console.error("Erreur gestion réponse pharmacie:", error);
+    }
+  },
+
+  async trouverAutrePharmacie(commandeId) {
+    try {
+      const commandeDoc = await db.collection('commandes').doc(commandeId).get();
+      if (!commandeDoc.exists) return;
+      const commande = commandeDoc.data();
+      const autresPharmacies = await getPharmaciesDeGarde();
+      const autresPharmaciesDispo = autresPharmacies.filter(p => p.id !== commande.pharmacieId);
+      if (autresPharmaciesDispo.length > 0) {
+        const nouvellePharmacie = autresPharmaciesDispo[0];
+        await db.collection('commandes').doc(commandeId).update({
+          pharmacieId: nouvellePharmacie.id,
+          pharmacieNom: nouvellePharmacie.nom,
+          statut: 'en_validation_pharmacie',
+          pharmaciePrecedente: commande.pharmacieId
+        });
+        await this.envoyerOrdonnancePharmacie(commandeId, commande.ordonnancePhotoUrl, nouvellePharmacie.id);
+        await sendTextMessage(commande.client.telephone,
+          `🔄 **Transfert à une autre pharmacie, ${commande.client.nom || "vous"}**\n\n` +
+          `La pharmacie précédente a refusé l'ordonnance.\n` +
+          `Nous avons transféré votre commande à une autre pharmacie de garde.\n\n` +
+          `Nouvelle pharmacie: ${nouvellePharmacie.nom}\n` +
+          `Tél: ${nouvellePharmacie.telephone}\n\n` +
+          `Attente de validation...`
+        );
+      } else {
+        await db.collection('commandes').doc(commandeId).update({
+          statut: 'annulee',
+          raisonAnnulation: 'Aucune pharmacie disponible'
+        });
+        await sendTextMessage(commande.client.telephone,
+          `❌ **Commande annulée, ${commande.client.nom || "vous"}**\n\n` +
+          `Aucune pharmacie de garde disponible pour valider votre ordonnance.\n\n` +
+          `Veuillez contacter directement une pharmacie.\n` +
+          `📞 Support: ${CONFIG.SUPPORT_PHONE}`
+        );
+      }
+    } catch (error) {
+      console.error("Erreur recherche autre pharmacie:", error);
+    }
+  }
 };
 
 // Module Gestion Panier
@@ -526,7 +843,90 @@ const panierManager = {
       return { allowed: false, message: "Erreur système lors de la vérification" };
     }
   },
-  // ... (le reste des méthodes de panierManager)
+
+  async ajouterAuPanier(userId, medicamentId, quantite = 1) {
+    try {
+      const verification = await this.peutAjouterMedicament(userId, medicamentId);
+      if (!verification.allowed) return { success: false, message: verification.message };
+      const medicament = verification.medicament;
+      const userState = userStates.get(userId) || { ...DEFAULT_STATE };
+      if (medicament.stock < quantite) {
+        return {
+          success: false,
+          message: `❌ **Stock insuffisant**\n\n` +
+                  `Vous demandez ${quantite} unité(s) mais il ne reste que ${medicament.stock} unité(s) disponible(s).`
+        };
+      }
+      if (userState.panier.length === 0) {
+        userState.pharmacieId = medicament.pharmacieId;
+        const pharmacieDoc = await db.collection('pharmacies').doc(medicament.pharmacieId).get();
+        if (pharmacieDoc.exists) userState.pharmacieNom = pharmacieDoc.data().nom;
+      }
+      const indexExist = userState.panier.findIndex(item => item.id === medicamentId);
+      if (indexExist !== -1) {
+        userState.panier[indexExist].quantite += quantite;
+      } else {
+        userState.panier.push({
+          id: medicament.id,
+          nom: medicament.nom,
+          prix: medicament.prix,
+          quantite: quantite,
+          imageUrl: medicament.imageUrls?.[0],
+          pharmacieId: medicament.pharmacieId,
+          necessiteOrdonnance: medicament.necessiteOrdonnance,
+          dosage: medicament.dosage,
+          forme: medicament.forme
+        });
+      }
+      if (medicament.necessiteOrdonnance) userState.besoinOrdonnance = true;
+      userStates.set(userId, userState);
+      return {
+        success: true,
+        message: `✅ **${medicament.nom} ajouté à votre panier**\n\n` +
+                `Quantité: ${quantite}\n` +
+                `Pharmacie: ${userState.pharmacieNom}\n` +
+                `Prix unitaire: ${medicament.prix} FCFA\n` +
+                `Sous-total: ${medicament.prix * quantite} FCFA\n\n` +
+                (medicament.necessiteOrdonnance ? `⚠️ **Ordonnance requise**\nVous devrez envoyer une photo de votre ordonnance lors du paiement.\n\n` : ''),
+        panier: userState.panier,
+        pharmacie: { id: userState.pharmacieId, nom: userState.pharmacieNom }
+      };
+    } catch (error) {
+      console.error("Erreur ajout panier:", error);
+      return { success: false, message: "❌ Erreur système lors de l'ajout au panier" };
+    }
+  },
+
+  async afficherPanier(userId) {
+    const userState = userStates.get(userId) || { ...DEFAULT_STATE };
+    if (userState.panier.length === 0) return `🛒 Votre panier est vide.`;
+    let message = `🛒 **VOTRE PANIER**\n\n`;
+    message += `🏥 Pharmacie: ${userState.pharmacieNom || 'Non spécifiée'}\n\n`;
+    let total = 0;
+    let itemsDetails = [];
+    userState.panier.forEach((item, index) => {
+      const sousTotal = item.prix * item.quantite;
+      total += sousTotal;
+      itemsDetails.push(
+        `${index + 1}. **${item.nom}**\n` +
+        `   💰 ${item.prix} FCFA × ${item.quantite} = ${sousTotal} FCFA\n` +
+        `   💊 ${item.dosage || ''} ${item.forme || ''}\n` +
+        (item.necessiteOrdonnance ? `   ⚠️ Ordonnance requise\n` : '')
+      );
+    });
+    message += itemsDetails.join('\n');
+    message += `\n────────────────\n`;
+    message += `💰 **Total: ${total} FCFA**\n`;
+    const fraisLivraison = getFraisLivraison();
+    message += `🚚 Frais livraison: ${fraisLivraison} FCFA\n`;
+    message += `🎯 **Total estimé: ${total + fraisLivraison} FCFA**\n\n`;
+    if (userState.besoinOrdonnance) {
+      message += `⚠️ **ATTENTION**\n`;
+      message += `Votre panier contient des médicaments nécessitant une ordonnance.\n`;
+      message += `Vous devrez envoyer une photo de votre ordonnance.\n\n`;
+    }
+    return message;
+  }
 };
 
 // Fonctions pour la recherche de médicaments
@@ -740,6 +1140,190 @@ async function handleTextMessage(from, text, userState) {
     const groqResponse = await getGroqAIResponse(text);
     await analyserReponseGroq(from, text, groqResponse, userState);
   }
+}
+
+// Fonctions pour la prise de rendez-vous
+async function handlePriseRendezVous(userId, texte, userState) {
+  if (userState.step === "ATTENTE_SELECTION_MEDECIN") {
+    const numeroMedecin = parseInt(texte.trim());
+    const medecins = userState.listeMedecins || [];
+    if (numeroMedecin >= 1 && numeroMedecin <= medecins.length) {
+      const medecin = medecins[numeroMedecin - 1];
+      userState.medecinId = medecin.id;
+      userState.medecinNom = medecin.nomComplet;
+      await demanderDateHeureRendezVous(userId, medecin.nomComplet, userState.cliniqueNom);
+      userState.step = "ATTENTE_DATE_HEURE_RENDEZ_VOUS";
+      userStates.set(userId, userState);
+    } else {
+      await sendTextMessage(userId, "❌ Numéro de médecin invalide. Veuillez réessayer.");
+    }
+    return;
+  }
+
+  if (userState.step === "ATTENTE_DATE_HEURE_RENDEZ_VOUS") {
+    const dateHeureRegex = /^(\d{2})\/(\d{2})\/(\d{4}) (\d{2}):(\d{2})$/;
+    const match = texte.trim().match(dateHeureRegex);
+    if (!match) {
+      await sendTextMessage(
+        userId,
+        "❌ **Format invalide.**\n" +
+        "Veuillez utiliser le format *JJ/MM/AAAA HH:MM* (ex: *25/12/2025 14:30*)."
+      );
+      return;
+    }
+    const [_, jour, mois, annee, heure, minute] = match;
+    const dateRendezVous = new Date(`${annee}-${mois}-${jour}T${heure}:${minute}:00Z`);
+    if (dateRendezVous <= new Date()) {
+      await sendTextMessage(userId, "❌ **Date ou heure invalide.**\nVeuillez choisir une date et une heure futures.");
+      return;
+    }
+    userState.dateRendezVous = dateRendezVous;
+    await confirmerRendezVous(userId, userState);
+    return;
+  }
+
+  if (userState.step === "ATTENTE_CONFIRMATION_RENDEZ_VOUS") {
+    if (texte.toLowerCase().includes("oui")) {
+      await finaliserRendezVous(userId, userState);
+    } else {
+      await sendTextMessage(userId, "❌ Rendez-vous annulé. Vous pouvez en prendre un autre quand vous voulez !");
+      userState.step = "MENU_PRINCIPAL";
+      userStates.set(userId, userState);
+    }
+    return;
+  }
+
+  // Recherche de médecin par spécialité
+  const specialites = ["dermatologue", "pédiatre", "gynécologue", "cardiologue", "nutritionniste", "psychologue"];
+  const specialiteTrouvee = specialites.find(s => texte.toLowerCase().includes(s));
+  if (specialiteTrouvee) {
+    const medecins = await rechercherMedecinsParSpecialite(specialiteTrouvee);
+    if (medecins.length === 0) {
+      await sendTextMessage(userId, `❌ Aucun ${specialiteTrouvee} disponible à San Pedro.`);
+      return;
+    }
+    let message = `👨⚕️ **${specialiteTrouvee.charAt(0).toUpperCase() + specialiteTrouvee.slice(1)}s disponibles** :\n\n`;
+    userState.listeMedecins = medecins;
+    for (const [index, medecin] of medecins.entries()) {
+      if (medecin.photoUrl) {
+        await sendImageMessage(
+          userId,
+          medecin.photoUrl,
+          `${index + 1}. **${medecin.nomComplet}**\n` +
+          `🌟 ${medecin.anneesExperience} ans d'expérience\n` +
+          `🏥 **Clinique** : ${medecin.centreSanteNom || 'Non spécifiée'}`
+        );
+      }
+      message += `${index + 1}. **${medecin.nomComplet}**\n`;
+      message += `   🌟 ${medecin.anneesExperience} ans d'expérience\n`;
+      message += `   🏥 Clinique : ${medecin.centreSanteNom || 'Non spécifiée'}\n\n`;
+    }
+    message += "Pour choisir un médecin, répondez avec son numéro.\nExemple : 1";
+    await sendTextMessage(userId, message);
+    userState.step = "ATTENTE_SELECTION_MEDECIN";
+    userStates.set(userId, userState);
+    return;
+  }
+
+  // Recherche de médicament
+  if (texte.toLowerCase().includes("cherche") || texte.toLowerCase().includes("médicament") || texte.toLowerCase().includes("paracétamol")) {
+    const nomMedicament = texte.toLowerCase().replace(/cherche|je veux|besoin de|un|une|du|de la/gi, "").trim();
+    await afficherMedicamentsFiltres(userId, nomMedicament);
+    userState.step = "ATTENTE_RECHERCHE_MEDICAMENT";
+    userStates.set(userId, userState);
+    return;
+  }
+
+  // Utiliser Groq pour comprendre l'intention
+  const groqResponse = await getGroqAIResponse(texte);
+  await analyserReponseGroq(userId, texte, groqResponse, userState);
+}
+
+async function rechercherMedecinsParSpecialite(specialite) {
+  try {
+    const centresSante = await getCentresSante();
+    const medecins = [];
+    for (const centre of centresSante) {
+      const medecinsCentre = await getMedecinsParClinique(centre.id);
+      medecins.push(...medecinsCentre.filter(m => m.specialite.toLowerCase().includes(specialite.toLowerCase())));
+    }
+    return medecins;
+  } catch (error) {
+    console.error("Erreur recherche médecins par spécialité:", error);
+    return [];
+  }
+}
+
+async function demanderDateHeureRendezVous(userId, medecinNom, cliniqueNom) {
+  await sendTextMessage(
+    userId,
+    `📅 **Choisissez une date et une heure pour votre rendez-vous avec ${medecinNom}**\n\n` +
+    `Veuillez indiquer la **date** (ex: *25/12/2025*) et l'**heure** (ex: *14:30*) de votre choix.\n` +
+    `📝 **Format attendu** : *JJ/MM/AAAA HH:MM*\n` +
+    `Exemple : *25/12/2025 14:30*`
+  );
+}
+
+async function confirmerRendezVous(userId, userState) {
+  let message = `🔍 **Confirmation de votre rendez-vous** :\n\n`;
+  message += `👨⚕️ **Médecin** : ${userState.medecinNom}\n`;
+  message += `🏥 **Clinique** : ${userState.cliniqueNom}\n`;
+  message += `📅 **Date/Heure** : ${userState.dateRendezVous.toLocaleString('fr-FR')}\n\n`;
+  message += `Pour **confirmer**, répondez : *OUI*\n`;
+  message += `Pour **annuler**, répondez : *NON*.`;
+  await sendTextMessage(userId, message);
+  userState.step = "ATTENTE_CONFIRMATION_RENDEZ_VOUS";
+  userStates.set(userId, userState);
+}
+
+async function finaliserRendezVous(userId, userState) {
+  const result = await creerRendezVous(
+    userState.cliniqueId,
+    userState.medecinId,
+    null,
+    userState.nom || "Client Pillbox",
+    userId,
+    userState.dateRendezVous,
+    "Rendez-vous pris via WhatsApp"
+  );
+  if (result.success) {
+    await sendTextMessage(
+      userId,
+      `✅ **Rendez-vous confirmé !** 🎉\n\n` +
+      `📝 **ID Rendez-vous** : #${result.rendezVousId.substring(0, 8)}\n` +
+      `👨⚕️ **Médecin** : ${userState.medecinNom}\n` +
+      `🏥 **Clinique** : ${userState.cliniqueNom}\n` +
+      `📅 **Date/Heure** : ${userState.dateRendezVous.toLocaleString('fr-FR')}\n\n` +
+      `🔔 **Un rappel vous sera envoyé 24h avant le rendez-vous.**`
+    );
+  } else {
+    await sendTextMessage(userId, `❌ **Erreur** : ${result.message}`);
+  }
+  userState.step = "MENU_PRINCIPAL";
+  userStates.set(userId, userState);
+}
+
+async function envoyerMessageBienvenue(userId, userState) {
+  await sendTextMessage(
+    userId,
+    `💊 **Bonjour ${userState.nom} !** Je suis Mia, votre assistante Pillbox. 🤖\n\n` +
+    `Je suis là pour vous aider à :\n` +
+    `- Commander des médicaments (avec ou sans ordonnance)\n` +
+    `- Trouver des pharmacies de garde 24h/24\n` +
+    `- Prendre des rendez-vous médicaux\n` +
+    `- Obtenir des conseils \n\n` +
+    `✨ **Exemples de demandes :**\n` +
+    `- "Je cherche du paracétamol 500mg"\n` +
+    `- "Prendre un rendez-vous avec un dermatologue"\n` +
+    `- "Je me sens stressé, que faire ?"\n` +
+    `- "Je veux perdre du poids, des conseils ?"\n\n` +
+    `⚠️ **Important :**\n` +
+    `- Ce service ne remplace pas un avis médical\n` +
+    `- En cas d’urgence, contactez le support client\n\n` +
+    `Par quoi commençons-nous aujourd’hui ?`
+  );
+  userState.initialized = true;
+  userStates.set(userId, userState);
 }
 
 // Webhook WhatsApp
