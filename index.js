@@ -150,6 +150,30 @@ async function getGroqAIResponse(userMessage) {
   }
 }
 
+// Fonction pour analyser la réponse de Groq
+async function analyserReponseGroq(userId, userMessage, groqResponse, userState) {
+  try {
+    await sendTextMessage(userId, groqResponse);
+
+    if (groqResponse.toLowerCase().includes("ordonnance")) {
+      userState.attentePhoto = true;
+      userState.step = "ATTENTE_PHOTO_ORDONNANCE";
+      await sendTextMessage(
+        userId,
+        "📸 **Veuillez envoyer une photo de votre ordonnance** pour valider votre commande."
+      );
+    } else if (groqResponse.toLowerCase().includes("panier")) {
+      userState.step = "ATTENTE_ACTION_PANIER";
+    } else if (groqResponse.toLowerCase().includes("rendez-vous")) {
+      userState.step = "ATTENTE_SELECTION_MEDECIN";
+    }
+    userStates.set(userId, userState);
+  } catch (error) {
+    console.error("Erreur analyse réponse Groq:", error);
+    await sendTextMessage(userId, "❌ Erreur lors du traitement de votre demande.");
+  }
+}
+
 // Fonctions WhatsApp
 async function sendTypingIndicator(to, duration = 3000) {
   try {
