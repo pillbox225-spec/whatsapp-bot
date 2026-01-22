@@ -933,20 +933,21 @@ const panierManager = {
 async function rechercherMedicamentDansPharmacies(nomMedicament) {
   try {
     console.log(`[DEBUG] Recherche de "${nomMedicament}" dans Firestore...`);
+
+    // 1. Récupérer tous les médicaments avec un stock > 0
     const medicamentsSnapshot = await db.collection('medicaments')
       .where('stock', '>', 0)
-      .where('nomLower', '>=', nomMedicament.toLowerCase())
-      .where('nomLower', '<=', nomMedicament.toLowerCase() + '\uf8ff')
       .get();
 
-    if (medicamentsSnapshot.empty) {
-      console.log(`[DEBUG] Aucun médicament trouvé pour "${nomMedicament}".`);
-      return {};
-    }
+    // 2. Filtrer les résultats en mémoire
+    const nomLower = nomMedicament.toLowerCase();
+    const medicamentsFiltres = medicamentsSnapshot.docs
+      .map(doc => ({ id: doc.id, ...doc.data() }))
+      .filter(m => m.nom && m.nom.toLowerCase().includes(nomLower));
 
+    // 3. Grouper par pharmacie
     const medicamentsParPharmacie = {};
-    medicamentsSnapshot.docs.forEach(doc => {
-      const medicament = { id: doc.id, ...doc.data() };
+    medicamentsFiltres.forEach(medicament => {
       const pharmacieId = medicament.pharmacieId;
       if (!medicamentsParPharmacie[pharmacieId]) {
         medicamentsParPharmacie[pharmacieId] = {
@@ -957,6 +958,7 @@ async function rechercherMedicamentDansPharmacies(nomMedicament) {
       medicamentsParPharmacie[pharmacieId].medicaments.push(medicament);
     });
 
+    // 4. Récupérer les informations des pharmacies
     for (const pharmacieId in medicamentsParPharmacie) {
       const pharmacieDoc = await db.collection('pharmacies').doc(pharmacieId).get();
       if (pharmacieDoc.exists) {
@@ -1245,7 +1247,7 @@ async function rechercherMedecinsParSpecialite(specialite) {
     const medecins = [];
     for (const centre of centresSante) {
       const medecinsCentre = await getMedecinsParClinique(centre.id);
-      medecins.push(...medecinsCentre.filter(m => m.specialite.toLowerCase().includes(specialite.toLowerCase())));
+      medecins.push(...medecinsCentre.filter(m => m.specialite && m.specialite.toLowerCase().includes(specialite.toLowerCase())));
     }
     return medecins;
   } catch (error) {
