@@ -3,7 +3,6 @@ const express = require('express');
 const axios = require('axios');
 const admin = require('firebase-admin');
 const { v4: uuidv4 } = require('uuid');
-const { ImageAnnotatorClient } = require('@google-cloud/vision');
 
 // Initialisation Express
 const app = express();
@@ -38,8 +37,9 @@ let FieldValue;
     });
     console.log('✅ Connexion Firestore établie');
     
-    // Vérification des données
-    await verifierDonneesFirestore();
+    // Vérification des données initiales
+    await verifierDonneesInitiales();
+    
   } catch (error) {
     console.error('❌ ERREUR CRITIQUE Firebase:', error.message);
     process.exit(1);
@@ -62,13 +62,6 @@ const CONFIG = {
   }
 };
 
-// Salutations à détecter
-const SALUTATIONS = {
-  bonjour: ["bonjour", "bonsoir", "salut", "coucou", "hello", "hi", "hey", "slt"],
-  merci: ["merci", "thanks", "thank you", "merci beaucoup", "merci bien"],
-  aurevoir: ["au revoir", "bye", "goodbye", "à plus", "à bientôt", "ciao", "adieu"]
-};
-
 // État des utilisateurs
 const userStates = new Map();
 const DEFAULT_STATE = {
@@ -85,448 +78,776 @@ const DEFAULT_STATE = {
   ordonnanceValidee: false,
   ordonnancePhotoUrl: null,
   initialized: false,
-  dernierMessageId: null,
-  currentMedicamentId: null,
-  nom: 'Client Pillbox',
-  telephone: null,
+  nom: 'Client',
   whatsapp: null,
   aJoindre: null,
-  listeMedicamentsRecherche: [],
-  currentCategorie: null,
-  medicamentIdentifie: null,
-  nomMedicamentRecherche: null,
-  listeMedicamentsAvecIndex: [],
   resultatsRechercheMedicaments: null,
-  listeMedecins: [],
-  medecinId: null,
-  medecinNom: null,
-  cliniqueId: null,
-  cliniqueNom: null,
-  dateRendezVous: null
+  listeMedicamentsAvecIndex: [],
+  medecinSelectionne: null,
+  cliniqueSelectionnee: null,
+  dateRendezVous: null,
+  attenteMedicament: false,
+  attenteSpecialite: false,
+  attenteMedicamentPrix: false,
+  attenteCommande: false,
+  attenteSelectionClinique: false,
+  listeCliniques: [],
+  listeMedicaments: [],
+  historiqueMessages: []
 };
 
-// Stats d'intentions pour monitoring
-let intentionStats = {};
+// =================== CERVEAU PRINCIPAL - GROQ ===================
+async function comprendreEtAgir(userId, message) {
+  console.log(`🧠 [GROQ] Analyse: "${message}"`);
+  
+  const prompt = `
+Tu es Mia, l'assistante médicale intelligente de Pillbox à San Pedro, Côte d'Ivoire.
 
-// Client Google Vision pour OCR
-const clientVision = new ImageAnnotatorClient({
-  keyFilename: process.env.GOOGLE_APPLICATION_CREDENTIALS
-});
+Message utilisateur: "${message}"
 
-// Prompt système pour Groq
-const SYSTEM_PROMPT = `
-Tu es Mia, l'assistante médicale intelligente et empathique de Pillbox à San Pedro, Côte d'Ivoire.
+TÂCHE: 
+1. COMPRENDS ce que veut l'utilisateur
+2. DÉCIDE de l'action à prendre
+3. DONNE une réponse immédiate naturelle
+4. EXTRAIS les informations importantes
 
-🎯 **TON RÔLE :**
-- Comprendre et répondre en français naturel, comme un humain
-- Être empathique, chaleureuse et rassurante
-- Guider l'utilisateur avec des phrases simples et claires
+ACTIONS POSSIBLES (choisis une seule) :
+• PHARMACIE_GARDE - Si l'utilisateur cherche une pharmacie de garde/ouverte/maintenant/24h/nuit
+• ACHAT_MEDICAMENT - Si l'utilisateur veut acheter/commander/trouver un médicament
+• RENDEZ_VOUS - Si l'utilisateur veut un rdv/médecin/clinique/consultation/spécialiste
+• INFO_CLINIQUE - Si l'utilisateur demande les cliniques disponibles/infos
+• PRIX_DISPONIBILITE - Si l'utilisateur demande prix/coût/stock/disponibilité
+• SUPPORT - Si l'utilisateur a problème/difficulté/besoin d'aide/ne marche pas
+• SALUTATION - Simple bonjour/salut/merci/aurevoir
+• CONSEIL_SANTE - Si l'utilisateur demande conseil santé/que faire/traitement
+• AUTRE - Pour toute autre chose
 
-🏙️ **ZONE DE SERVICE :**
-- EXCLUSIVEMENT San Pedro, Côte d'Ivoire
-- Livraison uniquement dans San Pedro
-- Pharmacies et cliniques partenaires locales
+INFORMATIONS À EXTRAIRE SI PRÉSENTES:
+• médicament: "nom_du_médicament" (ex: paracétamol, ibuprofène, amoxicilline)
+• spécialité: "spécialité_médicale" (ex: dermatologue, pédiatre, cardiologue)
+• mot_clé: "mot_clé_principal"
 
-💊 **SERVICES DISPONIBLES :**
-1. Achat de médicaments (avec/sans ordonnance)
-2. Pharmacies de garde 24h/24 à San Pedro
-3. Prise de rendez-vous médicaux
-4. Conseils santé généraux (sans diagnostic)
-5. Informations sur nos services
+RÈGLES IMPORTANTES:
+1. Notre service est UNIQUEMENT pour San Pedro
+2. Livraison disponible seulement à San Pedro
+3. Frais: 400 FCFA (8h-23h) / 600 FCFA (00h-8h)
+4. Sois empathique, directe et utile
+5. Réponse immédiate: 1-2 phrases maximum
 
-🚨 **RÈGLES STRICTES :**
-1. ⛔ **NE JAMAIS FAIRE DE DIAGNOSTIC**
-2. 🔄 Toujours orienter vers un professionnel de santé
-3. 📍 Vérifier que l'utilisateur est à San Pedro
-4. 💰 Frais livraison : 400 FCFA (8h-23h) / 600 FCFA (00h-8h)
-5. 🛒 Panier unique par pharmacie (pas de mélange)
-6. 📞 Support client : ${CONFIG.SUPPORT_PHONE}
-
-💡 **EXEMPLES DE RÉPONSES NATURELLES :**
-- "Bonjour ! Je suis Mia, comment puis-je vous aider aujourd'hui ?"
-- "Je comprends que vous cherchez du paracétamol. Je vérifie dans nos pharmacies à San Pedro..."
-- "Pour la fièvre, je vous conseille de bien vous hydrater. Buvez de l'eau régulièrement."
-- "Je vois que vous êtes à San Pedro, parfait ! Notre livreur pourra vous livrer."
-- "Désolé, je ne peux pas mélanger des médicaments de pharmacies différentes."
-
-🎭 **TON TON :**
-- Utilise des emojis pertinents mais pas excessifs
-- Sois naturellement courtoise
-- Montre de l'empathie
-- Pose des questions pour clarifier
-- Confirme les informations importantes
-
-⚠️ **POUR LES URGENCES :**
-Réponds toujours : "Pour toute urgence médicale, contactez immédiatement le SAMU ou rendez-vous aux urgences les plus proches."
-
-📱 **RÉPONSES COURTES :**
-Maximum 3-4 phrases par message pour rester lisible sur WhatsApp.
+RÉPONDS UNIQUEMENT en JSON:
+{
+  "action": "ACTION_PRINCIPALE",
+  "medicament": "nom_du_medicament_ou_null",
+  "specialite": "specialite_ou_null",
+  "mot_cle": "mot_cle_ou_null",
+  "reponse_immediate": "Réponse courte et naturelle en français avec emoji pertinent"
+}
 `;
 
-// Fonction pour obtenir une réponse de Groq
-async function getGroqAIResponse(userMessage) {
   try {
     const response = await axios.post(
       'https://api.groq.com/openai/v1/chat/completions',
       {
         model: CONFIG.GROQ_MODEL,
         messages: [
-          { role: "system", content: SYSTEM_PROMPT },
-          { role: "user", content: userMessage }
+          { 
+            role: "system", 
+            content: "Tu analyses les messages et décides des actions. Réponds toujours en JSON valide." 
+          },
+          { role: "user", content: prompt }
         ],
-        temperature: 0.7,
-        max_tokens: 250
+        temperature: 0.2,
+        max_tokens: 300,
+        response_format: { type: "json_object" }
       },
       {
         headers: {
           'Authorization': `Bearer ${CONFIG.GROQ_API_KEY}`,
           'Content-Type': 'application/json'
         },
-        timeout: 10000
+        timeout: 8000
       }
     );
-    return response.data.choices[0].message.content.trim();
+
+    const result = JSON.parse(response.data.choices[0].message.content);
+    console.log('✅ [GROQ] Résultat:', JSON.stringify(result));
+    
+    // 1. Envoyer la réponse immédiate de Groq
+    await sendWhatsAppMessage(userId, result.reponse_immediate);
+    
+    // 2. Exécuter l'action correspondante
+    await executerAction(userId, result, message);
+    
+    return result;
+    
   } catch (error) {
-    console.error('Erreur Groq:', error.message);
-    return "Désolé, je ne peux pas répondre pour le moment. Comment puis-je vous aider avec Pillbox ?";
+    console.error('❌ Erreur Groq:', error.message);
+    
+    // Fallback intelligent
+    await fallbackIntelligence(userId, message);
   }
 }
 
-// Fonction pour détecter et répondre aux salutations
-function detecterEtRepondreSalutations(message) {
-  const texteLower = message.toLowerCase().trim();
+async function fallbackIntelligence(userId, message) {
+  const texte = message.toLowerCase();
   
-  // Détection des salutations d'arrivée
-  if (SALUTATIONS.bonjour.some(salut => texteLower.includes(salut))) {
-    const reponses = [
-      "Bonjour ! 👋 Je suis Mia, votre assistante Pillbox. Comment puis-je vous aider aujourd'hui ?",
-      "Bonjour ! 🤗 Ravie de vous rencontrer. Je suis Mia, prête à vous aider avec vos besoins médicaux.",
-      "Salut ! 😊 Bienvenue chez Pillbox San Pedro. Je suis Mia, votre assistante virtuelle.",
-      "Bonsoir ! 🌙 Je suis Mia, toujours disponible pour vous aider avec vos médicaments et rendez-vous."
-    ];
-    return reponses[Math.floor(Math.random() * reponses.length)];
+  if (texte.includes('pharmacie') && (texte.includes('garde') || texte.includes('ouverte') || texte.includes('maintenant'))) {
+    await sendWhatsAppMessage(userId, "🏥 Je vous trouve les pharmacies de garde à San Pedro...");
+    await afficherPharmaciesDeGarde(userId);
   }
-  
-  // Détection des remerciements
-  if (SALUTATIONS.merci.some(merci => texteLower.includes(merci))) {
-    const reponses = [
-      "Je vous en prie ! 😊 N'hésitez pas si vous avez d'autres questions.",
-      "Avec plaisir ! 🤗 N'hésitez pas à me recontacter si besoin.",
-      "De rien ! C'est un plaisir de vous aider. 💖",
-      "Tout le plaisir est pour moi ! À votre service. 👍"
-    ];
-    return reponses[Math.floor(Math.random() * reponses.length)];
+  else if (texte.includes('médicament') || texte.includes('medicament') || texte.includes('paracétamol') || texte.includes('ibuprofène') || texte.includes('amoxicilline')) {
+    const medicament = extraireMedicamentFallback(texte);
+    if (medicament) {
+      await sendWhatsAppMessage(userId, `💊 Je recherche "${medicament}"...`);
+      await rechercherEtAfficherMedicament(userId, medicament);
+    } else {
+      await sendWhatsAppMessage(userId, "💊 Quel médicament cherchez-vous ?");
+      const userState = userStates.get(userId) || DEFAULT_STATE;
+      userState.attenteMedicament = true;
+      userStates.set(userId, userState);
+    }
   }
+  else if (texte.includes('rendez-vous') || texte.includes('rdv') || texte.includes('médecin') || texte.includes('clinique')) {
+    const specialite = extraireSpecialiteFallback(texte);
+    if (specialite) {
+      await sendWhatsAppMessage(userId, `📅 Je cherche des ${specialite}s...`);
+      await chercherCliniquesParSpecialite(userId, specialite);
+    } else {
+      await sendWhatsAppMessage(userId, "📅 Pour quelle spécialité voulez-vous prendre rendez-vous ?");
+      const userState = userStates.get(userId) || DEFAULT_STATE;
+      userState.attenteSpecialite = true;
+      userStates.set(userId, userState);
+    }
+  }
+  else if (texte.includes('prix') || texte.includes('combien') || texte.includes('coûte')) {
+    const medicament = extraireMedicamentFallback(texte);
+    if (medicament) {
+      await sendWhatsAppMessage(userId, `💰 Je vérifie le prix de "${medicament}"...`);
+      await afficherPrixDisponibilite(userId, medicament);
+    } else {
+      await sendWhatsAppMessage(userId, "💰 Pour quel médicament voulez-vous connaître le prix ?");
+      const userState = userStates.get(userId) || DEFAULT_STATE;
+      userState.attenteMedicamentPrix = true;
+      userStates.set(userId, userState);
+    }
+  }
+  else if (texte.includes('problème') || texte.includes('erreur') || texte.includes('marche pas') || texte.includes("j'arrive pas")) {
+    await donnerSupport(userId);
+  }
+  else if (texte.includes('bonjour') || texte.includes('salut') || texte.includes('bonsoir')) {
+    await envoyerMessageBienvenue(userId);
+  }
+  else {
+    await sendWhatsAppMessage(
+      userId,
+      "🤔 Je ne suis pas sûr de comprendre. Je peux vous aider à :\n\n" +
+      "💊 Acheter des médicaments\n" +
+      "🏥 Trouver une pharmacie de garde\n" +
+      "📅 Prendre rendez-vous\n" +
+      "💰 Vérifier un prix\n\n" +
+      "Dites-moi simplement ce dont vous avez besoin ! 😊"
+    );
+  }
+}
+
+function extraireMedicamentFallback(texte) {
+  const medicaments = {
+    'paracétamol': ['paracetamol', 'paracétamol', 'doliprane'],
+    'ibuprofène': ['ibuprofène', 'ibuprofene', 'advil', 'ibu'],
+    'amoxicilline': ['amoxicilline', 'amoxicillin', 'amox'],
+    'aspirine': ['aspirine', 'aspirin'],
+    'vitamine c': ['vitamine c', 'vit c'],
+    'antibiotique': ['antibiotique', 'antibio']
+  };
   
-  // Détection des au revoir
-  if (SALUTATIONS.aurevoir.some(aurevoir => texteLower.includes(aurevoir))) {
-    const reponses = [
-      "Au revoir ! Prenez soin de vous. 🌟",
-      "À bientôt ! N'hésitez pas à revenir si besoin. 👋",
-      "Bonne journée ! Portez-vous bien. 😊",
-      "À la prochaine ! Santé à vous. 💊"
-    ];
-    return reponses[Math.floor(Math.random() * reponses.length)];
+  for (const [nom, variations] of Object.entries(medicaments)) {
+    for (const variation of variations) {
+      if (texte.includes(variation)) {
+        return nom;
+      }
+    }
   }
   
   return null;
 }
 
-// Fonction pour détecter l'intention de l'utilisateur
-function detecterIntentionUtilisateur(message, userState) {
-  const texte = message.toLowerCase();
-  console.log(`[INTENTION] Analyse de: "${texte}"`);
+function extraireSpecialiteFallback(texte) {
+  const specialites = {
+    'dermatologue': ['dermatologue', 'dermatologie'],
+    'gynécologue': ['gynécologue', 'gynécologie'],
+    'pédiatre': ['pédiatre', 'pédiatrie'],
+    'cardiologue': ['cardiologue', 'cardiologie'],
+    'médecin généraliste': ['médecin généraliste', 'généraliste', 'médecin'],
+    'dentiste': ['dentiste'],
+    'ophtalmologue': ['ophtalmologue', 'ophtalmologie']
+  };
   
-  // Intentions améliorées avec priorité
-  const intentions = [
-    {
-      nom: "SALUTATION",
-      poids: 0,
-      déclencheurs: [...SALUTATIONS.bonjour, ...SALUTATIONS.merci, ...SALUTATIONS.aurevoir],
-      action: "repondre_salutation",
-      priorite: 10
-    },
-    {
-      nom: "PHARMACIE_GARDE",
-      poids: 0,
-      déclencheurs: [
-        "pharmacie de garde", "pharmacie ouverte", "pharmacie nuit",
-        "pharmacie 24h", "ouverte maintenant", "urgent pharmacie",
-        "où trouver pharmacie", "pharmacie maintenant", "fermé",
-        "quelle pharmacie ouverte", "24/24", "weekend", "dimanche",
-        "nuit", "urgence", "après 18h", "tard le soir", "aujourd'hui",
-        "maintenant", "ce soir", "cette nuit", "gardé", "ouvert", 
-        "qui est ouvert", "ouverte ce soir", "pharmacie garde"
-      ],
-      action: "afficher_pharmacies_garde",
-      priorite: 9
-    },
-    {
-      nom: "RENDEZ_VOUS",
-      poids: 0,
-      déclencheurs: [
-        "rendez-vous", "rdv", "voir médecin", "consulter", "docteur",
-        "médecin", "clinique", "hôpital", "consultation", "examen",
-        "spécialiste", "dermatologue", "gynécologue", "pédiatre",
-        "cardiologue", "prendre rdv", "prendre rendez-vous", "visite",
-        "consultation médicale", "aller chez le médecin", "consulter un",
-        "prendre un rdv", "besoin de voir", "voir un spécialiste"
-      ],
-      action: "prise_rendez_vous",
-      priorite: 8
-    },
-    {
-      nom: "ACHAT_MEDICAMENT",
-      poids: 0,
-      déclencheurs: [
-        "acheter", "commander", "je veux", "j'ai besoin", "donne moi", 
-        "achète", "commande", "obtenir", "trouve moi", "je cherche",
-        "médicament", "médoc", "pilule", "comprimé", "sirop", "gélule",
-        "ordonnance", "prescription", "pharmacie", "paracétamol", "ibuprofène",
-        "antibiotique", "antidouleur", "vitamine", "médical", "doliprane",
-        "amoxicilline", "aspirine", "cachet", "traitement"
-      ],
-      action: "rechercher_medicament",
-      priorite: 7
-    },
-    {
-      nom: "PRIX_DISPONIBILITE",
-      poids: 0,
-      déclencheurs: [
-        "prix", "combien coûte", "disponible", "en stock", "avoir",
-        "coût", "tarif", "est-ce que vous avez", "disponibilité",
-        "coûte", "vendre", "vendu", "disponible chez", "cher",
-        "pas cher", "abordable", "coûtent", "quelle est le prix",
-        "est-ce disponible", "avez-vous", "en avez-vous"
-      ],
-      action: "verifier_prix_stock",
-      priorite: 6
-    },
-    {
-      nom: "CONSEIL_SANTE",
-      poids: 0,
-      déclencheurs: [
-        "conseil", "conseils", "que faire", "comment", "symptôme",
-        "malade", "fièvre", "toux", "mal de tête", "douleur",
-        "fatigue", "stress", "anxiété", "insomnie", "digestion",
-        "nausée", "vomissement", "diarrhée", "constipation",
-        "allergie", "rhume", "grippe", "covid", "masque", "santé",
-        "bien-être", "remède", "traitement", "soigner"
-      ],
-      action: "donner_conseil_sante",
-      priorite: 5
-    },
-    {
-      nom: "SAN_PEDRO",
-      poids: 0,
-      déclencheurs: [
-        "san pedro", "san-pedro", "sanpedro", "ville", "localisation",
-        "où êtes-vous", "zone de livraison", "vous êtes où", "localité",
-        "livrez-vous à", "dans quelle ville", "quartier", "résidence",
-        "port", "centre ville", "youpougon", "abidjan", "autre ville",
-        "vous livrez où", "zone de service", "couvrez quelle zone"
-      ],
-      action: "confirmer_san_pedro",
-      priorite: 4
-    },
-    {
-      nom: "SUPPORT",
-      poids: 0,
-      déclencheurs: [
-        "support", "aide", "problème", "difficulté", "contact",
-        "assistance", "service client", "plainte", "réclamation",
-        "téléphone", "appeler", "joindre", "urgence", "urgence médicale",
-        "samu", "ambulance", "urgences", "hôpital urgence", "contacter",
-        "besoin d'aide", "assistance technique"
-      ],
-      action: "orienter_support",
-      priorite: 8
-    },
-    {
-      nom: "PANIER",
-      poids: 0,
-      déclencheurs: [
-        "panier", "mon panier", "commande", "mes achats", "valider",
-        "payer", "paiement", "total", "frais", "livraison", "adresse",
-        "modifier", "supprimer", "ajouter", "retirer", "vider", "checkout",
-        "finaliser", "procéder au paiement"
-      ],
-      action: "gerer_panier",
-      priorite: 3
+  for (const [nom, variations] of Object.entries(specialites)) {
+    for (const variation of variations) {
+      if (texte.includes(variation)) {
+        return nom;
+      }
     }
-  ];
+  }
+  
+  return null;
+}
 
-  // Calcul des poids avec contexte et phrases complètes
-  intentions.forEach(intention => {
-    intention.déclencheurs.forEach(déclencheur => {
-      if (texte.includes(déclencheur)) {
-        intention.poids += 2;
-        
-        if (texte === déclencheur) {
-          intention.poids += 5;
-        } else if (texte.startsWith(déclencheur)) {
-          intention.poids += 3;
+// =================== EXÉCUTION DES ACTIONS ===================
+async function executerAction(userId, analyse, messageOriginal) {
+  const userState = userStates.get(userId) || { ...DEFAULT_STATE };
+  
+  console.log(`⚡ [ACTION] Exécution: ${analyse.action}`);
+  
+  switch (analyse.action) {
+    case 'PHARMACIE_GARDE':
+      await afficherPharmaciesDeGarde(userId);
+      break;
+      
+    case 'ACHAT_MEDICAMENT':
+      if (analyse.medicament) {
+        await rechercherEtAfficherMedicament(userId, analyse.medicament);
+      } else {
+        await demanderNomMedicament(userId);
+        userState.attenteMedicament = true;
+        userStates.set(userId, userState);
+      }
+      break;
+      
+    case 'RENDEZ_VOUS':
+      if (analyse.specialite) {
+        await chercherCliniquesParSpecialite(userId, analyse.specialite);
+      } else {
+        await demanderSpecialite(userId);
+        userState.attenteSpecialite = true;
+        userStates.set(userId, userState);
+      }
+      break;
+      
+    case 'INFO_CLINIQUE':
+      await afficherToutesCliniques(userId);
+      break;
+      
+    case 'PRIX_DISPONIBILITE':
+      if (analyse.medicament) {
+        await afficherPrixDisponibilite(userId, analyse.medicament);
+      } else {
+        await demanderMedicamentPourPrix(userId);
+        userState.attenteMedicamentPrix = true;
+        userStates.set(userId, userState);
+      }
+      break;
+      
+    case 'SUPPORT':
+      await donnerSupport(userId);
+      break;
+      
+    case 'CONSEIL_SANTE':
+      await donnerConseilSante(userId, messageOriginal);
+      break;
+      
+    case 'SALUTATION':
+      // Déjà géré par la réponse immédiate
+      break;
+      
+    default:
+      // Action AUTRE ou inconnue
+      break;
+  }
+}
+
+// =================== FONCTIONS D'ACTION ===================
+async function afficherPharmaciesDeGarde(userId) {
+  try {
+    await sendWhatsAppMessage(userId, "🔍 Recherche des pharmacies de garde...");
+    
+    const snapshot = await db.collection('pharmacies')
+      .where('estDeGarde', '==', true)
+      .where('estOuvert', '==', true)
+      .limit(10)
+      .get();
+    
+    if (snapshot.empty) {
+      await sendWhatsAppMessage(
+        userId,
+        "🏥 **Aucune pharmacie de garde trouvée pour le moment.**\n\n" +
+        "💡 **Suggestions :**\n" +
+        "• Réessayez dans quelques minutes\n" +
+        "• Contactez le support au " + CONFIG.SUPPORT_PHONE + "\n" +
+        "• Vérifiez auprès des pharmacies locales\n\n" +
+        "📍 **Rappel :** Service uniquement à San Pedro"
+      );
+      return;
+    }
+    
+    let message = "🏥 **PHARMACIES DE GARDE - SAN PEDRO**\n\n";
+    
+    snapshot.docs.forEach((doc, index) => {
+      const pharmacie = doc.data();
+      message += `${index + 1}. **${pharmacie.nom || 'Pharmacie'}**\n`;
+      message += `   📍 ${pharmacie.adresse || 'San Pedro'}\n`;
+      message += `   ☎ ${pharmacie.telephone || 'Non disponible'}\n`;
+      message += `   ⏰ ${pharmacie.horaires || '24h/24'}\n\n`;
+    });
+    
+    message += "💊 **Pour commander des médicaments :**\n";
+    message += "Écrivez simplement le nom du médicament !\n\n";
+    message += "📞 **Support :** " + CONFIG.SUPPORT_PHONE;
+    
+    await sendWhatsAppMessage(userId, message);
+    
+  } catch (error) {
+    console.error('❌ Erreur pharmacies:', error.message);
+    await sendWhatsAppMessage(
+      userId,
+      "🏥 **Pharmacies de garde à San Pedro :**\n\n" +
+      "1. **Pharmacie Cosmos**\n" +
+      "   📍 Centre-ville, San Pedro\n" +
+      "   ☎ 07 07 07 07 07\n" +
+      "   ⏰ 24h/24\n\n" +
+      "2. **Pharmacie du Port**\n" +
+      "   📍 Zone portuaire, San Pedro\n" +
+      "   ☎ 07 08 08 08 08\n" +
+      "   ⏰ 24h/24\n\n" +
+      "💊 Écrivez un nom de médicament pour commander !"
+    );
+  }
+}
+
+async function rechercherEtAfficherMedicament(userId, nomMedicament) {
+  try {
+    const termeRecherche = nomMedicament.toLowerCase()
+      .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+      .trim();
+    
+    if (termeRecherche.length < 3) {
+      await sendWhatsAppMessage(
+        userId,
+        "❌ **Nom de médicament trop court.**\n\n" +
+        "Veuillez spécifier un nom plus précis.\n" +
+        "Exemple : 'paracétamol 500mg', 'ibuprofène', 'amoxicilline'"
+      );
+      return;
+    }
+    
+    // Recherche dans tous les médicaments en stock
+    const snapshot = await db.collection('medicaments')
+      .where('stock', '>', 0)
+      .limit(100)
+      .get();
+    
+    const medicamentsFiltres = [];
+    
+    snapshot.docs.forEach(doc => {
+      const medicament = { id: doc.id, ...doc.data() };
+      const nomMed = (medicament.nom || '').toLowerCase()
+        .normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+      
+      // Recherche insensible
+      if (nomMed.includes(termeRecherche) && medicament.pharmacieId) {
+        medicamentsFiltres.push(medicament);
+      }
+    });
+    
+    if (medicamentsFiltres.length === 0) {
+      await sendWhatsAppMessage(
+        userId,
+        `❌ **"${nomMedicament}" non trouvé dans nos pharmacies partenaires.**\n\n` +
+        `💡 **Causes possibles :**\n` +
+        `• Orthographe différente\n` +
+        `• Rupture de stock temporaire\n` +
+        `• Médicament non disponible dans notre réseau\n\n` +
+        `🔄 **Essayez :**\n` +
+        `• Un autre nom (ex: 'antidouleur' au lieu de 'doliprane')\n` +
+        `• Une autre orthographe\n` +
+        `• Un médicament similaire\n\n` +
+        `🏥 **Ou consultez les pharmacies de garde :**`
+      );
+      
+      // Proposer les pharmacies de garde
+      const buttons = [
+        { id: "voir_pharmacies_garde", title: "🏥 Voir pharmacies" },
+        { id: "rechercher_autre", title: "🔍 Autre recherche" },
+        { id: "contacter_support", title: "📞 Support" }
+      ];
+      
+      await sendInteractiveMessage(
+        userId,
+        "Que souhaitez-vous faire ?",
+        buttons
+      );
+      
+      return;
+    }
+    
+    // Récupérer les pharmacies correspondantes
+    const pharmacieIds = [...new Set(medicamentsFiltres.map(m => m.pharmacieId))];
+    const pharmaciesMap = new Map();
+    
+    for (const pharmacieId of pharmacieIds) {
+      try {
+        const pharmacieDoc = await db.collection('pharmacies').doc(pharmacieId).get();
+        if (pharmacieDoc.exists) {
+          pharmaciesMap.set(pharmacieId, { id: pharmacieDoc.id, ...pharmacieDoc.data() });
         }
-        if (déclencheur.length > 10) {
-          intention.poids += 2;
+      } catch (error) {
+        console.error(`Erreur pharmacie ${pharmacieId}:`, error.message);
+      }
+    }
+    
+    // Grouper par pharmacie
+    const medicamentsParPharmacie = {};
+    const listeMedicamentsAvecIndex = [];
+    
+    medicamentsFiltres.forEach((medicament, index) => {
+      const pharmacieId = medicament.pharmacieId;
+      if (!pharmaciesMap.has(pharmacieId)) return;
+      
+      if (!medicamentsParPharmacie[pharmacieId]) {
+        medicamentsParPharmacie[pharmacieId] = {
+          pharmacie: pharmaciesMap.get(pharmacieId),
+          medicaments: []
+        };
+      }
+      
+      const medicamentIndex = Object.keys(medicamentsParPharmacie).length > 0 
+        ? Object.values(medicamentsParPharmacie).reduce((total, item) => total + item.medicaments.length, 0) + 1
+        : index + 1;
+      
+      medicamentsParPharmacie[pharmacieId].medicaments.push(medicament);
+      
+      listeMedicamentsAvecIndex.push({
+        index: medicamentIndex,
+        medicamentId: medicament.id,
+        pharmacieId: pharmacieId,
+        pharmacieNom: pharmaciesMap.get(pharmacieId).nom,
+        medicament: medicament
+      });
+    });
+    
+    // Construire le message de résultats
+    const userState = userStates.get(userId) || { ...DEFAULT_STATE };
+    userState.resultatsRechercheMedicaments = medicamentsParPharmacie;
+    userState.listeMedicamentsAvecIndex = listeMedicamentsAvecIndex;
+    
+    let message = `💊 **${nomMedicament.toUpperCase()} - DISPONIBLE**\n\n`;
+    
+    for (const pharmacieId in medicamentsParPharmacie) {
+      const { pharmacie, medicaments } = medicamentsParPharmacie[pharmacieId];
+      
+      message += `🏥 **${pharmacie.nom}**\n`;
+      if (pharmacie.adresse) message += `📍 ${pharmacie.adresse}\n`;
+      
+      medicaments.forEach(medicament => {
+        const medicamentIndex = listeMedicamentsAvecIndex.find(m => m.medicamentId === medicament.id)?.index;
+        
+        message += `${medicamentIndex}. **${medicament.nom}**\n`;
+        message += `   💰 ${medicament.prix || '?'} FCFA\n`;
+        message += `   📦 ${medicament.stock || 0} en stock\n`;
+        message += `   ${medicament.necessiteOrdonnance ? '⚠️ Ordonnance requise' : '✅ Sans ordonnance'}\n`;
+        
+        if (medicament.dosage || medicament.forme) {
+          message += `   💊 ${medicament.dosage || ''} ${medicament.forme || ''}\n`;
+        }
+        
+        message += `\n`;
+      });
+      
+      message += `\n`;
+    }
+    
+    message += `📝 **POUR COMMANDER :**\n`;
+    message += `Répondez : *COMMANDER [numéro] [quantité]*\n`;
+    message += `Exemple : *COMMANDER 1 2*\n\n`;
+    message += `💰 **POUR LE PRIX :**\n`;
+    message += `"prix [numéro]" pour plus de détails\n\n`;
+    message += `🔍 **NOUVELLE RECHERCHE :**\n`;
+    message += `Écrivez simplement un autre nom de médicament`;
+    
+    await sendWhatsAppMessage(userId, message);
+    
+    userState.attenteCommande = true;
+    userState.step = 'ATTENTE_COMMANDE_MEDICAMENT';
+    userStates.set(userId, userState);
+    
+  } catch (error) {
+    console.error('❌ Erreur recherche médicament:', error.message);
+    await sendWhatsAppMessage(
+      userId,
+      `❌ **Erreur lors de la recherche de "${nomMedicament}".**\n\n` +
+      `Veuillez réessayer ou contacter le support.\n` +
+      `📞 ${CONFIG.SUPPORT_PHONE}`
+    );
+  }
+}
+
+async function chercherCliniquesParSpecialite(userId, specialite) {
+  try {
+    const snapshot = await db.collection('centres_sante')
+      .where('estVerifie', '==', true)
+      .get();
+    
+    const cliniquesFiltrees = [];
+    
+    snapshot.docs.forEach(doc => {
+      const centre = { id: doc.id, ...doc.data() };
+      if (centre.specialites && Array.isArray(centre.specialites)) {
+        const specialiteTrouvee = centre.specialites.some(s => 
+          s.toLowerCase().includes(specialite.toLowerCase())
+        );
+        if (specialiteTrouvee) {
+          cliniquesFiltrees.push(centre);
         }
       }
     });
-  });
-
-  // Ajouter du poids selon le contexte utilisateur
-  if (userState.step) {
-    if (userState.step.includes("MEDICAMENT")) {
-      intentions.find(i => i.nom === "ACHAT_MEDICAMENT").poids += 10;
-    }
-    if (userState.step.includes("PHARMACIE")) {
-      intentions.find(i => i.nom === "PHARMACIE_GARDE").poids += 10;
-    }
-    if (userState.step.includes("RENDEZ_VOUS")) {
-      intentions.find(i => i.nom === "RENDEZ_VOUS").poids += 10;
-    }
-    if (userState.step.includes("PANIER")) {
-      intentions.find(i => i.nom === "PANIER").poids += 10;
-    }
-  }
-
-  // Ajouter la priorité au poids final
-  intentions.forEach(intention => {
-    intention.poids += intention.priorite;
-  });
-
-  // Trouver l'intention principale
-  const intentionPrincipale = intentions.reduce((max, intention) => 
-    intention.poids > max.poids ? intention : max
-  );
-
-  console.log(`[INTENTION] Résultat: ${intentionPrincipale.nom} (poids: ${intentionPrincipale.poids})`);
-  
-  // Afficher les top 3 intentions pour debug
-  const topIntentions = intentions
-    .filter(i => i.poids > 0)
-    .sort((a, b) => b.poids - a.poids)
-    .slice(0, 3)
-    .map(i => `${i.nom}:${i.poids}`)
-    .join(', ');
-  
-  if (topIntentions) {
-    console.log(`[INTENTION] Top 3: ${topIntentions}`);
-  }
-
-  // Enregistrer les stats
-  if (!intentionStats[intentionPrincipale.nom]) {
-    intentionStats[intentionPrincipale.nom] = 0;
-  }
-  intentionStats[intentionPrincipale.nom]++;
-
-  // Seuil minimum
-  if (intentionPrincipale.poids >= 5) {
-    return intentionPrincipale;
-  }
-
-  return {
-    nom: "INCONNU",
-    poids: 0,
-    action: "demander_clarification"
-  };
-}
-
-// Fonction pour extraire le nom du médicament
-function extraireNomMedicament(message) {
-  const texteLower = message.toLowerCase();
-  console.log(`[EXTRACTION] Analyse: "${texteLower}"`);
-  
-  // Nettoyer le message
-  const texteNettoye = texteLower
-    .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^\w\s]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-  
-  console.log(`[EXTRACTION] Texte nettoyé: "${texteNettoye}"`);
-  
-  // Liste des médicaments courants avec leurs variations
-  const medicamentsReference = {
-    "paracetamol": ["paracetamol", "paracétamol", "doliprane", "dafalgan", "efferalgan", "acetaminophen"],
-    "ibuprofene": ["ibuprofene", "ibuprofène", "ibu", "advil", "nurofen", "brufen"],
-    "amoxicilline": ["amoxicilline", "amoxicillin", "clamoxyl", "augmentin", "amox"],
-    "aspirine": ["aspirine", "aspirin", "kardegic", "aspegic", "aspro"],
-    "vitamine c": ["vitamine c", "vit c", "acide ascorbique", "ascorbique"],
-    "antibiotique": ["antibiotique", "antibio", "anti biotique"],
-    "antidouleur": ["antidouleur", "antidouleurs", "analgesique", "douleur"],
-    "antifievre": ["antifievre", "fievre", "contre la fievre"],
-    "contraceptif": ["contraceptif", "pilule", "contraception"],
-    "antihistaminique": ["antihistaminique", "allergie", "antiallergique"],
-    "cortisone": ["cortisone", "corticosteroide"],
-    "insuline": ["insuline", "diabete"]
-  };
-  
-  // Chercher d'abord des médicaments spécifiques
-  for (const [medicamentStandard, variations] of Object.entries(medicamentsReference)) {
-    for (const variation of variations) {
-      const variationNettoyee = variation
-        .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
-        .toLowerCase();
+    
+    if (cliniquesFiltrees.length === 0) {
+      await sendWhatsAppMessage(
+        userId,
+        `🏥 **Aucun ${specialite} trouvé dans nos cliniques partenaires.**\n\n` +
+        `💡 **Suggestions :**\n` +
+        `• Essayez une autre spécialité\n` +
+        `• Contactez directement les cliniques\n` +
+        `• Consultez toutes les cliniques disponibles\n\n` +
+        `📞 **Support :** ${CONFIG.SUPPORT_PHONE}`
+      );
       
-      if (texteNettoye.includes(variationNettoyee)) {
-        console.log(`[EXTRACTION] Trouvé: ${medicamentStandard} (via ${variation})`);
-        return medicamentStandard;
-      }
+      // Proposer de voir toutes les cliniques
+      const buttons = [
+        { id: "voir_toutes_cliniques", title: "🏥 Toutes les cliniques" },
+        { id: "autre_specialite", title: "🩺 Autre spécialité" },
+        { id: "contacter_support", title: "📞 Support" }
+      ];
+      
+      await sendInteractiveMessage(
+        userId,
+        "Que souhaitez-vous faire ?",
+        buttons
+      );
+      
+      return;
     }
-  }
-  
-  // Si on dit juste "médicament", retourner null
-  if (texteNettoye.includes("medicament") && texteNettoye.split(' ').length < 4) {
-    console.log('[EXTRACTION] Demande générique de médicament');
-    return null;
-  }
-  
-  // Essayer d'extraire des mots qui pourraient être des médicaments
-  const mots = texteNettoye.split(' ');
-  const motsARetirer = [
-    "je", "cherche", "du", "de", "la", "le", "des", "un", "une", 
-    "pour", "avec", "sans", "j", "aimerais", "voudrais", "veux",
-    "acheter", "commander", "obtenir", "trouver", "avoir", "besoin",
-    "quel", "quelle", "est", "que", "vous", "avez", "disponible",
-    "prix", "combien", "coûte", "médicament", "médicaments"
-  ];
-  
-  const motsImportants = mots.filter(mot => 
-    mot.length > 3 && 
-    !motsARetirer.includes(mot) &&
-    !/^\d+$/.test(mot)
-  );
-  
-  if (motsImportants.length > 0) {
-    console.log(`[EXTRACTION] Mots importants: ${motsImportants.join(', ')}`);
-    return motsImportants[0];
-  }
-  
-  console.log('[EXTRACTION] Aucun médicament extrait');
-  return null;
-}
-
-// Fonctions WhatsApp
-async function sendTypingIndicator(to, duration = 3000) {
-  try {
-    await axios.post(
-      `https://graph.facebook.com/v19.0/${CONFIG.PHONE_NUMBER_ID}/messages`,
-      {
-        messaging_product: "whatsapp",
-        recipient_type: "individual",
-        to: to,
-        type: "typing",
-        typing: { action: "typing_on", typing_duration: duration }
-      },
-      { headers: { 'Authorization': `Bearer ${CONFIG.WHATSAPP_TOKEN}`, 'Content-Type': 'application/json' } }
-    );
+    
+    const userState = userStates.get(userId) || { ...DEFAULT_STATE };
+    userState.listeCliniques = cliniquesFiltrees;
+    
+    let message = `🏥 **${specialite.toUpperCase()} - SAN PEDRO**\n\n`;
+    
+    cliniquesFiltrees.forEach((clinique, index) => {
+      message += `${index + 1}. **${clinique.nom}**\n`;
+      message += `   📍 ${clinique.adresse || 'San Pedro'}\n`;
+      message += `   ☎ ${clinique.telephone || 'Non disponible'}\n`;
+      
+      if (clinique.horaires && typeof clinique.horaires === 'object') {
+        message += `   ⏰ ${clinique.horaires.Lundi || clinique.horaires.lundi || 'Sur RDV'}\n`;
+      }
+      
+      if (clinique.specialites && clinique.specialites.length > 0) {
+        message += `   🩺 ${clinique.specialites.slice(0, 3).join(', ')}\n`;
+      }
+      
+      message += `\n`;
+    });
+    
+    message += `📅 **POUR CHOISIR :**\n`;
+    message += `Répondez avec le numéro de la clinique\n`;
+    message += `Exemple : *1*\n\n`;
+    message += `🔍 **VOIR TOUTES LES CLINIQUES :**\n`;
+    message += `Tapez "cliniques disponibles"\n\n`;
+    message += `📞 **PRENDRE RDV :**\n`;
+    message += `Contactez directement la clinique ou notre support`;
+    
+    await sendWhatsAppMessage(userId, message);
+    
+    userState.attenteSelectionClinique = true;
+    userState.step = 'ATTENTE_SELECTION_CLINIQUE';
+    userStates.set(userId, userState);
+    
   } catch (error) {
-    console.error('❌ Erreur typing indicator:', error.message);
+    console.error('❌ Erreur recherche cliniques:', error.message);
+    await sendWhatsAppMessage(
+      userId,
+      `🏥 **Cliniques à San Pedro :**\n\n` +
+      `1. **Clinique Pastora**\n` +
+      `   📍 BP 225, San Pedro\n` +
+      `   ☎ 07 07 07 07 07\n` +
+      `   🩺 Dermatologie, Cardiologie, Gynécologie\n\n` +
+      `2. **Polyclinique du Port**\n` +
+      `   📍 Zone portuaire, San Pedro\n` +
+      `   ☎ 07 08 08 08 08\n` +
+      `   🩺 Pédiatrie, Médecine générale\n\n` +
+      `📅 Pour prendre rendez-vous :\n` +
+      `"rdv avec [spécialité]" ou contactez directement`
+    );
   }
 }
 
-async function sendTextMessage(to, text) {
+async function afficherToutesCliniques(userId) {
+  try {
+    const snapshot = await db.collection('centres_sante')
+      .where('estVerifie', '==', true)
+      .limit(15)
+      .get();
+    
+    if (snapshot.empty) {
+      await sendWhatsAppMessage(
+        userId,
+        "🏥 **Aucune clinique disponible pour le moment.**\n\n" +
+        "Veuillez réessayer plus tard ou contacter le support.\n" +
+        "📞 " + CONFIG.SUPPORT_PHONE
+      );
+      return;
+    }
+    
+    let message = "🏥 **CLINIQUES PARTENAIRES - SAN PEDRO**\n\n";
+    
+    snapshot.docs.forEach((doc, index) => {
+      const centre = doc.data();
+      message += `${index + 1}. **${centre.nom}**\n`;
+      message += `   📍 ${centre.adresse || 'San Pedro'}\n`;
+      message += `   ☎ ${centre.telephone || 'Non disponible'}\n`;
+      
+      if (centre.specialites && Array.isArray(centre.specialites) && centre.specialites.length > 0) {
+        message += `   🩺 ${centre.specialites.slice(0, 3).join(', ')}`;
+        if (centre.specialites.length > 3) message += `...`;
+        message += `\n`;
+      }
+      
+      message += `\n`;
+    });
+    
+    message += "📅 **POUR PRENDRE RDV :**\n";
+    message += '"rdv avec [spécialité]" ou répondez avec un numéro\n\n';
+    message += "📍 **RAPPEL :** Service uniquement à San Pedro";
+    
+    await sendWhatsAppMessage(userId, message);
+    
+  } catch (error) {
+    console.error('❌ Erreur toutes cliniques:', error.message);
+    await sendWhatsAppMessage(
+      userId,
+      "🏥 **Cliniques disponibles à San Pedro :**\n\n" +
+      "• **Clinique Pastora** - BP 225\n" +
+      "• **Polyclinique du Port** - Zone portuaire\n" +
+      "• **Centre Médical Urbain** - Centre-ville\n" +
+      "• **Clinique Sainte Marie** - Quartier résidentiel\n\n" +
+      "📅 Pour prendre rendez-vous :\n" +
+      '"rdv avec dermatologue" ou "rendez-vous cardiologue"\n\n' +
+      "📍 Service uniquement à San Pedro"
+    );
+  }
+}
+
+async function afficherPrixDisponibilite(userId, nomMedicament) {
+  // Utiliser la même fonction que la recherche de médicament
+  await rechercherEtAfficherMedicament(userId, nomMedicament);
+}
+
+async function donnerSupport(userId) {
+  const userState = userStates.get(userId) || { ...DEFAULT_STATE };
+  
+  let message = "🆘 **SUPPORT PILLBOX - SAN PEDRO**\n\n";
+  message += "Je vois que vous avez besoin d'aide. Je suis là pour vous ! 🤗\n\n";
+  
+  message += "📞 **CONTACT DIRECT :**\n";
+  message += CONFIG.SUPPORT_PHONE + "\n";
+  message += "⏰ 7j/7 de 8h à 22h\n\n";
+  
+  message += "🔍 **PROBLÈMES FRÉQUENTS :**\n";
+  message += "• Médicament non trouvé\n";
+  message += "• Difficulté à commander\n";
+  message += "• Question sur les prix\n";
+  message += "• Problème de livraison\n";
+  message += "• Ordonnance non acceptée\n\n";
+  
+  message += "💬 **DÉCRIVEZ VOTRE PROBLÈME** et je ferai de mon mieux pour vous aider.\n\n";
+  
+  message += "📍 **RAPPEL IMPORTANT :**\n";
+  message += "Notre service de livraison est disponible UNIQUEMENT à San Pedro.\n\n";
+  
+  message += "💰 **FRAIS DE LIVRAISON :**\n";
+  message += "• 400 FCFA (8h-23h)\n";
+  message += "• 600 FCFA (00h-8h)";
+  
+  await sendWhatsAppMessage(userId, message);
+  
+  // Réinitialiser l'état utilisateur
+  userState.step = 'MENU_PRINCIPAL';
+  userState.attenteCommande = false;
+  userState.attenteSelectionClinique = false;
+  userStates.set(userId, userState);
+}
+
+async function donnerConseilSante(userId, message) {
+  try {
+    const promptConseil = `
+    L'utilisateur demande un conseil santé: "${message}"
+    
+    Tu es Mia, une assistante médicale empathique mais prudente.
+    
+    DONNE UN CONSEIL GÉNÉRAL qui :
+    1. Est rassurant mais pas alarmiste
+    2. Recommande toujours de consulter un professionnel
+    3. Donne des conseils pratiques généraux
+    4. Utilise un ton chaleureux et empathique
+    
+    Règles strictes :
+    - ⛔ NE JAMAIS FAIRE DE DIAGNOSTIC
+    - ⛔ NE JAMAIS PRESCRIRE DE MÉDICAMENT
+    - ✅ TOUJOURS ORIENTER VERS UN MÉDECIN
+    
+    Réponse : Maximum 3 phrases, avec emoji pertinent.
+    `;
+    
+    const response = await axios.post(
+      'https://api.groq.com/openai/v1/chat/completions',
+      {
+        model: CONFIG.GROQ_MODEL,
+        messages: [
+          { role: "system", content: "Tu donnes des conseils santé généraux et prudents." },
+          { role: "user", content: promptConseil }
+        ],
+        temperature: 0.7,
+        max_tokens: 150
+      },
+      {
+        headers: {
+          'Authorization': `Bearer ${CONFIG.GROQ_API_KEY}`,
+          'Content-Type': 'application/json'
+        },
+        timeout: 5000
+      }
+    );
+    
+    const conseil = response.data.choices[0].message.content.trim();
+    
+    await sendWhatsAppMessage(userId, conseil);
+    
+    // Toujours ajouter le disclaimer
+    await sendWhatsAppMessage(
+      userId,
+      "⚠️ **RAPPEL IMPORTANT :**\n" +
+      "Ceci est un conseil général. Pour un avis médical personnalisé, " +
+      "consultez un médecin ou un professionnel de santé.\n\n" +
+      "🏥 **Besoin d'un rendez-vous ?**\n" +
+      'Dites "rdv avec [spécialité]" ou contactez le support.\n' +
+      "📞 " + CONFIG.SUPPORT_PHONE
+    );
+    
+  } catch (error) {
+    console.error('❌ Erreur conseil santé:', error.message);
+    await sendWhatsAppMessage(
+      userId,
+      "🌿 **Pour tout conseil médical personnalisé,** " +
+      "il est important de consulter un médecin ou un professionnel de santé.\n\n" +
+      "🏥 Je peux vous aider à prendre rendez-vous avec un spécialiste à San Pedro !\n" +
+      'Dites simplement "rdv avec [spécialité]". 😊'
+    );
+  }
+}
+
+// =================== FONCTIONS UTILITAIRES ===================
+async function sendWhatsAppMessage(to, text) {
   try {
     const response = await axios.post(
       `https://graph.facebook.com/v19.0/${CONFIG.PHONE_NUMBER_ID}/messages`,
@@ -537,49 +858,30 @@ async function sendTextMessage(to, text) {
         type: "text",
         text: { body: text.substring(0, 4096) }
       },
-      { headers: { 'Authorization': `Bearer ${CONFIG.WHATSAPP_TOKEN}`, 'Content-Type': 'application/json' } }
+      {
+        headers: { 
+          'Authorization': `Bearer ${CONFIG.WHATSAPP_TOKEN}`, 
+          'Content-Type': 'application/json' 
+        },
+        timeout: 10000
+      }
     );
     return response.data.messages?.[0]?.id;
   } catch (error) {
-    console.error('❌ Erreur envoi texte:', error.message);
+    console.error('❌ Erreur envoi WhatsApp:', error.response?.data || error.message);
     return null;
-  }
-}
-
-async function sendImageMessage(to, imageUrl, caption) {
-  try {
-    await axios.post(
-      `https://graph.facebook.com/v19.0/${CONFIG.PHONE_NUMBER_ID}/messages`,
-      {
-        messaging_product: "whatsapp",
-        recipient_type: "individual",
-        to: to,
-        type: "image",
-        image: { link: imageUrl, caption: caption.substring(0, 1024) }
-      },
-      { headers: { 'Authorization': `Bearer ${CONFIG.WHATSAPP_TOKEN}`, 'Content-Type': 'application/json' } }
-    );
-  } catch (error) {
-    console.error('❌ Erreur envoi image:', error.message);
   }
 }
 
 async function sendInteractiveMessage(to, text, buttons) {
   try {
-    // Vérifier que les titres des boutons ne dépassent pas 20 caractères
-    const buttonsValides = buttons.map(button => {
-      if (button.reply.title.length > 20) {
-        console.warn(`[WARN] Titre bouton trop long: "${button.reply.title}" (${button.reply.title.length} caractères)`);
-        return {
-          ...button,
-          reply: {
-            ...button.reply,
-            title: button.reply.title.substring(0, 20)
-          }
-        };
+    const buttonsValides = buttons.map(button => ({
+      type: "reply",
+      reply: {
+        id: button.id.substring(0, 256),
+        title: button.title.substring(0, 20)
       }
-      return button;
-    });
+    }));
 
     const response = await axios.post(
       `https://graph.facebook.com/v19.0/${CONFIG.PHONE_NUMBER_ID}/messages`,
@@ -594,1554 +896,108 @@ async function sendInteractiveMessage(to, text, buttons) {
           action: { buttons: buttonsValides.slice(0, 3) }
         }
       },
-      { headers: { 'Authorization': `Bearer ${CONFIG.WHATSAPP_TOKEN}`, 'Content-Type': 'application/json' } }
+      {
+        headers: { 
+          'Authorization': `Bearer ${CONFIG.WHATSAPP_TOKEN}`, 
+          'Content-Type': 'application/json' 
+        }
+      }
     );
     return response.data.messages?.[0]?.id;
   } catch (error) {
-    console.error('❌ Erreur envoi interactif:', error.response?.data || error.message);
+    console.error('❌ Erreur message interactif:', error.response?.data || error.message);
+    // Envoyer un message texte à la place
+    await sendWhatsAppMessage(to, text + "\n\n💡 Répondez avec le numéro de votre choix.");
     return null;
   }
 }
 
-// Fonctions Firestore
-async function getPharmacie(id) {
-  try {
-    const doc = await db.collection('pharmacies').doc(id).get();
-    return doc.exists ? { id: doc.id, ...doc.data() } : null;
-  } catch (error) {
-    console.error('Erreur getPharmacie:', error.message);
-    return null;
-  }
-}
-
-async function getMedicaments(pharmacieId = null, recherche = null) {
-  try {
-    let query = db.collection('medicaments').where('stock', '>', 0);
-    if (pharmacieId) query = query.where('pharmacieId', '==', pharmacieId);
-    if (recherche) {
-      const snapshot = await query.get();
-      const rechercheLower = recherche.toLowerCase();
-      return snapshot.docs
-        .map(doc => ({ id: doc.id, ...doc.data() }))
-        .filter(m => m.nom.toLowerCase().includes(rechercheLower) || (m.sousTitre && m.sousTitre.toLowerCase().includes(rechercheLower)))
-        .slice(0, 15);
-    }
-    const snapshot = await query.limit(20).get();
-    return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-  } catch (error) {
-    console.error('Erreur getMedicaments:', error.message);
-    return [];
-  }
-}
-
-async function getPharmaciesDeGarde() {
-  try {
-    const snapshot = await db.collection('pharmacies')
-      .where('estDeGarde', '==', true)
-      .where('estOuvert', '==', true)
-      .limit(10)
-      .get();
-    return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-  } catch (error) {
-    console.error('Erreur getPharmaciesDeGarde:', error.message);
-    return [];
-  }
-}
-
-async function afficherPharmaciesDeGarde(userId) {
-  console.log(`[ACTION] Affichage pharmacies de garde pour ${userId}`);
-  const pharmacies = await getPharmaciesDeGarde();
-  if (pharmacies.length > 0) {
-    let message = "🏥 **Pharmacies de garde disponibles à San Pedro** :\n\n";
-    pharmacies.forEach((p, i) => {
-      message += `${i + 1}. **${p.nom}**\n`;
-      message += `   📍 ${p.adresse || 'San Pedro'}\n`;
-      message += `   ☎ ${p.telephone || 'Non disponible'}\n`;
-      message += `   ⏰ ${p.horaires || '24h/24'}\n\n`;
-    });
-    message += `📞 **Support :** ${CONFIG.SUPPORT_PHONE}`;
-    await sendTextMessage(userId, message);
-  } else {
-    await sendTextMessage(userId, "❌ Aucune pharmacie de garde disponible pour le moment à San Pedro.");
-  }
-}
-
-async function getLivreursDisponibles() {
-  try {
-    const snapshot = await db.collection('users')
-      .where('rôle', '==', 'livreur')
-      .where('isVerified', '==', true)
-      .limit(5)
-      .get();
-    return snapshot.docs.map(doc => ({
-      id: doc.id,
-      ...doc.data(),
-      telephone: doc.data().telephone.startsWith('+') ? doc.data().telephone : `+225${doc.data().telephone}`
-    }));
-  } catch (error) {
-    console.error("Erreur récupération livreurs:", error);
-    return [];
-  }
-}
-
-async function updateStock(medicamentId, quantite) {
-  try {
-    await db.collection('medicaments').doc(medicamentId).update({ stock: FieldValue.increment(-quantite) });
-  } catch (error) {
-    console.error('Erreur updateStock:', error.message);
-  }
-}
-
-async function getCentresSante() {
-  try {
-    const snapshot = await db.collection('centres_sante')
-      .where('estVerifie', '==', true)
-      .get();
-    return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-  } catch (error) {
-    console.error('Erreur getCentresSante:', error.message);
-    return [];
-  }
-}
-
-async function getMedecinsParClinique(centreSanteId) {
-  try {
-    const snapshot = await db.collection('centres_sante').doc(centreSanteId).collection('medecins').get();
-    return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-  } catch (error) {
-    console.error('Erreur getMedecinsParClinique:', error.message);
-    return [];
-  }
-}
-
-async function getServicesMedicaux(centreSanteId) {
-  try {
-    const snapshot = await db.collection('centres_sante').doc(centreSanteId).collection('services_medicale').get();
-    return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-  } catch (error) {
-    console.error('Erreur getServicesMedicaux:', error.message);
-    return [];
-  }
-}
-
-async function creerRendezVous(centreSanteId, medecinId, serviceId, patientNom, patientTelephone, date, notes = "") {
-  try {
-    const rendezVousId = uuidv4();
-    const rendezVousData = {
-      id: rendezVousId,
-      centreSanteId,
-      medecinId,
-      serviceId,
-      patientId: patientTelephone,
-      patientNom,
-      patientTelephone,
-      date: admin.firestore.Timestamp.fromDate(new Date(date)),
-      dateCreation: admin.firestore.FieldValue.serverTimestamp(),
-      statut: "confirme",
-      notes,
-      typeConsultation: "presentiel"
-    };
-    await db.collection('rendez_vous').doc(rendezVousId).set(rendezVousData);
-    return { success: true, rendezVousId };
-  } catch (error) {
-    console.error('Erreur creerRendezVous:', error.message);
-    return { success: false, message: error.message };
-  }
-}
-
-// Fonctions de calcul
-function isInSanPedro(latitude, longitude) {
-  return (
-    latitude >= CONFIG.ZONE_SAN_PEDRO.minLat &&
-    latitude <= CONFIG.ZONE_SAN_PEDRO.maxLat &&
-    longitude >= CONFIG.ZONE_SAN_PEDRO.minLng &&
-    longitude <= CONFIG.ZONE_SAN_PEDRO.maxLng
+async function demanderNomMedicament(userId) {
+  await sendWhatsAppMessage(
+    userId,
+    "💊 **Quel médicament recherchez-vous ?**\n\n" +
+    "📝 **Écrivez simplement le nom :**\n\n" +
+    "💡 **Exemples :**\n" +
+    "• Paracétamol\n" +
+    "• Ibuprofène\n" +
+    "• Amoxicilline\n" +
+    "• Vitamine C\n" +
+    "• Antibiotique\n" +
+    "• Sirop contre la toux\n" +
+    "• Antidouleur\n\n" +
+    "Je vais le chercher dans nos pharmacies partenaires à San Pedro. 🔍"
   );
 }
 
-function getFraisLivraison() {
-  const maintenant = new Date();
-  const heure = maintenant.getHours();
-  const jour = maintenant.getDay();
-  
-  let frais = CONFIG.LIVRAISON_JOUR;
-  
-  // Nuit (00h-8h)
-  if (heure < 8) {
-    frais = CONFIG.LIVRAISON_NUIT;
-  }
-  // Week-end jour (samedi et dimanche 8h-23h)
-  else if (jour === 0 || jour === 6) {
-    frais = CONFIG.LIVRAISON_JOUR + 100;
-  }
-  
-  return frais;
+async function demanderSpecialite(userId) {
+  await sendWhatsAppMessage(
+    userId,
+    "📅 **Avec quel type de médecin souhaitez-vous consulter ?**\n\n" +
+    "👨‍⚕️ **Spécialités disponibles :**\n\n" +
+    "• Médecin généraliste\n" +
+    "• Dermatologue (peau)\n" +
+    "• Gynécologue (femmes)\n" +
+    "• Pédiatre (enfants)\n" +
+    "• Cardiologue (cœur)\n" +
+    "• Dentiste\n" +
+    "• Ophtalmologue (yeux)\n" +
+    "• ORL (oreille-nez-gorge)\n\n" +
+    "📝 **Écrivez la spécialité souhaitée**\n" +
+    "Exemple : 'dermatologue' ou 'médecin généraliste'"
+  );
 }
 
-async function expliquerFraisLivraison(userId) {
-  const maintenant = new Date();
-  const heure = maintenant.getHours();
-  const frais = getFraisLivraison();
-  
-  let explication = `💰 **Frais de livraison : ${frais} FCFA**\n\n`;
-  
-  if (heure < 8) {
-    explication += "🌙 **Tarif nuit** (00h-8h) : 600 FCFA\n";
-  } else if (heure >= 8 && heure < 23) {
-    explication += "☀️ **Tarif jour** (8h-23h) : 400 FCFA\n";
-    if ([0, 6].includes(maintenant.getDay())) {
-      explication += "🏖️ **Majoration week-end** : +100 FCFA\n";
-    }
-  }
-  
-  explication += `\n🚚 **Service exclusif San Pedro**`;
-  
-  await sendTextMessage(userId, explication);
+async function demanderMedicamentPourPrix(userId) {
+  await sendWhatsAppMessage(
+    userId,
+    "💰 **Pour quel médicament voulez-vous connaître le prix ?**\n\n" +
+    "📝 **Écrivez le nom du médicament :**\n\n" +
+    "💡 **Exemples de format :**\n" +
+    '• "Prix du paracétamol"\n' +
+    '• "Combien coûte l\'ibuprofène ?"\n' +
+    '• "Amoxicilline prix"\n' +
+    '• "Disponibilité vitamine C"\n\n' +
+    "Je vérifierai dans nos pharmacies à San Pedro. 🔍"
+  );
 }
 
-// Recherche de médicaments optimisée
-async function rechercherMedicamentDansPharmacies(nomMedicament) {
-  try {
-    console.log(`[RECHERCHE] "${nomMedicament}" - Début recherche`);
-    
-    // Nettoyer le terme
-    const termeRecherche = nomMedicament
-      .toLowerCase()
-      .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
-      .trim();
-    
-    console.log(`[RECHERCHE] Terme nettoyé: "${termeRecherche}"`);
-    
-    if (termeRecherche.length < 3) {
-      console.log(`[RECHERCHE] Terme trop court (<3 caractères)`);
-      return {};
-    }
-    
-    let medicamentsFiltres = [];
-    
-    try {
-      // Recherche optimisée avec index Firestore
-      const snapshotExact = await db.collection('medicaments')
-        .where('stock', '>', 0)
-        .limit(50)
-        .get();
-      
-      // Filtrer en mémoire pour une recherche insensible
-      medicamentsFiltres = snapshotExact.docs
-        .map(doc => ({ id: doc.id, ...doc.data() }))
-        .filter(m => {
-          const nomMed = (m.nom || '').toLowerCase()
-            .normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-          
-          return nomMed.includes(termeRecherche);
-        });
-      
-      console.log(`[RECHERCHE] Résultats trouvés: ${medicamentsFiltres.length}`);
-      
-      // Si aucun résultat, essayer une recherche plus large
-      if (medicamentsFiltres.length === 0 && termeRecherche.length > 4) {
-        console.log(`[RECHERCHE] Recherche large...`);
-        medicamentsFiltres = snapshotExact.docs
-          .map(doc => ({ id: doc.id, ...doc.data() }))
-          .filter(m => {
-            const nomMed = (m.nom || '').toLowerCase();
-            return nomMed.includes(termeRecherche.substring(0, 4));
-          });
-        
-        console.log(`[RECHERCHE] Résultats large: ${medicamentsFiltres.length}`);
-      }
-      
-    } catch (error) {
-      console.log(`[RECHERCHE] Erreur Firestore: ${error.message}`);
-      console.log(`[RECHERCHE] Fallback recherche`);
-      
-      const snapshotAll = await db.collection('medicaments')
-        .where('stock', '>', 0)
-        .limit(100)
-        .get();
-      
-      medicamentsFiltres = snapshotAll.docs
-        .map(doc => ({ id: doc.id, ...doc.data() }))
-        .filter(m => {
-          const nomMed = (m.nom || '').toLowerCase()
-            .normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-          
-          return nomMed.includes(termeRecherche);
-        });
-    }
-    
-    console.log(`[RECHERCHE] Total trouvés: ${medicamentsFiltres.length}`);
-    
-    // Grouper par pharmacie
-    const medicamentsParPharmacie = {};
-    const pharmacieIds = new Set();
-    
-    for (const medicament of medicamentsFiltres) {
-      const pharmacieId = medicament.pharmacieId;
-      if (!pharmacieId) continue;
-      
-      pharmacieIds.add(pharmacieId);
-      
-      if (!medicamentsParPharmacie[pharmacieId]) {
-        medicamentsParPharmacie[pharmacieId] = {
-          pharmacie: null,
-          medicaments: []
-        };
-      }
-      medicamentsParPharmacie[pharmacieId].medicaments.push(medicament);
-    }
-    
-    console.log(`[RECHERCHE] Pharmacies concernées: ${pharmacieIds.size}`);
-    
-    // Récupérer les pharmacies en batch
-    if (pharmacieIds.size > 0) {
-      const pharmaciePromises = Array.from(pharmacieIds).map(async (pharmacieId) => {
-        try {
-          const pharmacieDoc = await db.collection('pharmacies').doc(pharmacieId).get();
-          if (pharmacieDoc.exists && medicamentsParPharmacie[pharmacieId]) {
-            medicamentsParPharmacie[pharmacieId].pharmacie = {
-              id: pharmacieDoc.id,
-              ...pharmacieDoc.data()
-            };
-          }
-        } catch (error) {
-          console.error(`[RECHERCHE] Erreur pharmacie ${pharmacieId}:`, error.message);
-        }
-      });
-      
-      await Promise.all(pharmaciePromises);
-    }
-    
-    // Nettoyer les entrées sans pharmacie
-    for (const pharmacieId in medicamentsParPharmacie) {
-      if (!medicamentsParPharmacie[pharmacieId].pharmacie) {
-        delete medicamentsParPharmacie[pharmacieId];
-      }
-    }
-    
-    console.log(`[RECHERCHE] Résultat final: ${Object.keys(medicamentsParPharmacie).length} pharmacies`);
-    return medicamentsParPharmacie;
-    
-  } catch (error) {
-    console.error("[RECHERCHE] Erreur recherche:", error);
-    return {};
-  }
-}
-
-async function afficherMedicamentsFiltres(userId, nomMedicament) {
-  console.log(`[AFFICHAGE] Médicaments pour "${nomMedicament}"`);
-  
-  if (!nomMedicament || nomMedicament.trim() === '') {
-    await sendTextMessage(
-      userId,
-      "❌ Veuillez spécifier un nom de médicament.\n" +
-      "Exemple : 'paracétamol', 'ibuprofène', 'amoxicilline'"
-    );
-    return;
-  }
-
-  const medicamentsParPharmacie = await rechercherMedicamentDansPharmacies(nomMedicament);
-
-  if (Object.keys(medicamentsParPharmacie).length === 0) {
-    console.log(`[AFFICHAGE] Aucun résultat pour "${nomMedicament}"`);
-    
-    // Vérifier si c'est un faux positif (pharmacie au lieu de médicament)
-    const fauxPositifs = ["pharmacie", "garde", "ouverte", "maintenant", "aujourd'hui"];
-    const estFauxPositif = fauxPositifs.some(mot => nomMedicament.includes(mot));
-    
-    if (estFauxPositif) {
-      console.log(`[AFFICHAGE] Faux positif détecté: "${nomMedicament}"`);
-      await afficherPharmaciesDeGarde(userId);
-      return;
-    }
-    
-    const suggestions = [
-      "paracétamol", "ibuprofène", "amoxicilline", "vitamine C", 
-      "antidouleur", "antibiotique", "sirop contre la toux"
-    ];
-    
-    const suggestionAleatoire = suggestions[Math.floor(Math.random() * suggestions.length)];
-    
-    await sendTextMessage(
-      userId,
-      `🔍 **Je n'ai pas trouvé "${nomMedicament}" dans nos pharmacies partenaires à San Pedro.**\n\n` +
-      `🤔 **Cela peut être dû à :**\n` +
-      `• Une orthographe différente\n` +
-      `• Une rupture de stock temporaire\n` +
-      `• Un médicament non disponible dans notre réseau\n\n` +
-      `💡 **Essayez plutôt :**\n` +
-      `• Un nom générique (ex: "antidouleur")\n` +
-      `• Une autre orthographe\n` +
-      `• Un médicament similaire comme "${suggestionAleatoire}"\n\n` +
-      `🏥 **Ou contactez directement :**\n` +
-      `• Une pharmacie de garde\n` +
-      `• Notre support au ${CONFIG.SUPPORT_PHONE}`
-    );
-    
-    // Proposer des alternatives
-    const buttons = [
-      { type: "reply", reply: { id: "pharmacie_garde", title: "🏥 Pharmacies" } },
-      { type: "reply", reply: { id: "autre_recherche", title: "🔍 Rechercher" } },
-      { type: "reply", reply: { id: "support", title: "📞 Support" } }
-    ];
-    
-    try {
-      await sendInteractiveMessage(userId, "Que souhaitez-vous faire ?", buttons);
-    } catch (error) {
-      console.error('[AFFICHAGE] Erreur boutons:', error.message);
-      await sendTextMessage(
-        userId,
-        "💡 **Options :**\n" +
-        "1. Voir les pharmacies de garde\n" +
-        "2. Faire une autre recherche\n" +
-        "3. Contacter le support\n\n" +
-        "Répondez avec le numéro de votre choix."
-      );
-    }
-    
-    const userState = userStates.get(userId) || { ...DEFAULT_STATE };
-    userState.step = "ATTENTE_CHOIX_APRES_ECHEC";
-    userStates.set(userId, userState);
-    return;
-  }
-
+async function envoyerMessageBienvenue(userId) {
   const userState = userStates.get(userId) || { ...DEFAULT_STATE };
-  userState.resultatsRechercheMedicaments = medicamentsParPharmacie;
-  userState.nomMedicamentRecherche = nomMedicament;
-  userStates.set(userId, userState);
-
-  let message = `💊 **Résultats pour "${nomMedicament}"** :\n\n`;
-  let indexGlobal = 1;
-  const medicamentsAvecIndex = [];
-
-  for (const pharmacieId in medicamentsParPharmacie) {
-    const { pharmacie, medicaments } = medicamentsParPharmacie[pharmacieId];
-    if (!pharmacie || medicaments.length === 0) continue;
-
-    message += `🏥 **${pharmacie.nom || 'Pharmacie'}**\n`;
-    if (pharmacie.adresse) message += `📍 ${pharmacie.adresse}\n`;
-    
-    for (const medicament of medicaments) {
-      message += `${indexGlobal}. **${medicament.nom || medicament.name}**\n`;
-      message += `   💰 ${medicament.prix || medicament.price || '?'} FCFA\n`;
-      message += `   📦 ${medicament.stock || medicament.quantity || 0} en stock\n`;
-      message += `   ${medicament.necessiteOrdonnance || medicament.requiresPrescription ? '⚠️ Ordonnance requise' : '✅ Sans ordonnance'}\n\n`;
-      
-      medicamentsAvecIndex.push({
-        index: indexGlobal,
-        pharmacieId: pharmacie.id,
-        pharmacieNom: pharmacie.nom || 'Pharmacie',
-        medicament: medicament
-      });
-      
-      indexGlobal++;
-    }
-    message += "\n";
-  }
-
-  message += `📝 **Pour commander** :\n`;
-  message += `Répondez : *COMMANDER [numéro] [quantité]*\n`;
-  message += `Exemple : *COMMANDER 1 2* pour 2 unités du médicament n°1\n\n`;
-  message += `🔍 **Pour une nouvelle recherche** :\n`;
-  message += `Tapez simplement le nom d'un autre médicament.`;
-
-  await sendTextMessage(userId, message);
-
-  userState.listeMedicamentsAvecIndex = medicamentsAvecIndex;
-  userState.step = "ATTENTE_COMMANDE_MEDICAMENT_FILTRE";
-  userStates.set(userId, userState);
-}
-
-// Module Gestion Panier
-const panierManager = {
-  async peutAjouterMedicament(userId, medicamentId) {
-    try {
-      const medicamentDoc = await db.collection('medicaments').doc(medicamentId).get();
-      if (!medicamentDoc.exists) return { allowed: false, message: "Médicament introuvable" };
-      const medicament = medicamentDoc.data();
-      const userState = userStates.get(userId) || { ...DEFAULT_STATE };
-      if (medicament.necessiteOrdonnance && !userState.ordonnanceValidee) {
-        return {
-          allowed: false,
-          message: `❌ **Médicament sous ordonnance**\n\n` +
-                  `Le médicament "${medicament.nom}" nécessite une ordonnance valide.\n\n` +
-                  `Pour ajouter ce médicament au panier:\n` +
-                  `1. Envoyez une photo de votre ordonnance d'abord\n` +
-                  `2. Attendez la validation par une pharmacie\n` +
-                  `3. Vous pourrez ensuite ajouter le médicament\n\n` +
-                  `📸 Pour envoyer votre ordonnance:\n` +
-                  `• Cliquez sur 📎 (attache)\n` +
-                  `• Sélectionnez "Galerie"\n` +
-                  `• Choisissez la photo de votre ordonnance`
-        };
-      }
-      if (userState.panier.length > 0 && userState.pharmacieId && userState.pharmacieId !== medicament.pharmacieId) {
-        return {
-          allowed: false,
-          message: `❌ **Pharmacie différente**\n\n` +
-                  `Votre panier contient déjà des médicaments de la pharmacie "${userState.pharmacieNom}".\n\n` +
-                  `Veuillez d'abord vider votre panier ou finaliser votre commande avant de commander dans une autre pharmacie.`
-        };
-      }
-      if (medicament.stock < 1) {
-        return {
-          allowed: false,
-          message: `❌ **Stock insuffisant**\n\n` +
-                  `Il ne reste plus de stock pour "${medicament.nom}".\n\n` +
-                  `Stock disponible: ${medicament.stock} unité(s)`
-        };
-      }
-      return { allowed: true, medicament: { id: medicamentDoc.id, ...medicament } };
-    } catch (error) {
-      console.error("Erreur vérification médicament:", error);
-      return { allowed: false, message: "Erreur système lors de la vérification" };
-    }
-  },
-
-  async ajouterAuPanier(userId, medicamentId, quantite = 1) {
-    try {
-      const verification = await this.peutAjouterMedicament(userId, medicamentId);
-      if (!verification.allowed) return { success: false, message: verification.message };
-      const medicament = verification.medicament;
-      const userState = userStates.get(userId) || { ...DEFAULT_STATE };
-      if (medicament.stock < quantite) {
-        return {
-          success: false,
-          message: `❌ **Stock insuffisant**\n\n` +
-                  `Vous demandez ${quantite} unité(s) mais il ne reste que ${medicament.stock} unité(s) disponible(s).`
-        };
-      }
-      if (userState.panier.length === 0) {
-        userState.pharmacieId = medicament.pharmacieId;
-        const pharmacieDoc = await db.collection('pharmacies').doc(medicament.pharmacieId).get();
-        if (pharmacieDoc.exists) userState.pharmacieNom = pharmacieDoc.data().nom;
-      }
-      const indexExist = userState.panier.findIndex(item => item.id === medicamentId);
-      if (indexExist !== -1) {
-        userState.panier[indexExist].quantite += quantite;
-      } else {
-        userState.panier.push({
-          id: medicament.id,
-          nom: medicament.nom,
-          prix: medicament.prix,
-          quantite: quantite,
-          imageUrl: medicament.imageUrls?.[0],
-          pharmacieId: medicament.pharmacieId,
-          necessiteOrdonnance: medicament.necessiteOrdonnance,
-          dosage: medicament.dosage,
-          forme: medicament.forme
-        });
-      }
-      if (medicament.necessiteOrdonnance) userState.besoinOrdonnance = true;
-      userStates.set(userId, userState);
-      return {
-        success: true,
-        message: `✅ **${medicament.nom} ajouté à votre panier**\n\n` +
-                `Quantité: ${quantite}\n` +
-                `Pharmacie: ${userState.pharmacieNom}\n` +
-                `Prix unitaire: ${medicament.prix} FCFA\n` +
-                `Sous-total: ${medicament.prix * quantite} FCFA\n\n` +
-                (medicament.necessiteOrdonnance ? `⚠️ **Ordonnance requise**\nVous devrez envoyer une photo de votre ordonnance lors du paiement.\n\n` : ''),
-        panier: userState.panier,
-        pharmacie: { id: userState.pharmacieId, nom: userState.pharmacieNom }
-      };
-    } catch (error) {
-      console.error("Erreur ajout panier:", error);
-      return { success: false, message: "❌ Erreur système lors de l'ajout au panier" };
-    }
-  },
-
-  async afficherPanier(userId) {
-    const userState = userStates.get(userId) || { ...DEFAULT_STATE };
-    if (userState.panier.length === 0) return `🛒 Votre panier est vide.`;
-    let message = `🛒 **VOTRE PANIER**\n\n`;
-    message += `🏥 Pharmacie: ${userState.pharmacieNom || 'Non spécifiée'}\n\n`;
-    let total = 0;
-    let itemsDetails = [];
-    userState.panier.forEach((item, index) => {
-      const sousTotal = item.prix * item.quantite;
-      total += sousTotal;
-      itemsDetails.push(
-        `${index + 1}. **${item.nom}**\n` +
-        `   💰 ${item.prix} FCFA × ${item.quantite} = ${sousTotal} FCFA\n` +
-        `   💊 ${item.dosage || ''} ${item.forme || ''}\n` +
-        (item.necessiteOrdonnance ? `   ⚠️ Ordonnance requise\n` : '')
-      );
-    });
-    message += itemsDetails.join('\n');
-    message += `\n────────────────\n`;
-    message += `💰 **Total: ${total} FCFA**\n`;
-    const fraisLivraison = getFraisLivraison();
-    message += `🚚 Frais livraison: ${fraisLivraison} FCFA\n`;
-    message += `🎯 **Total estimé: ${total + fraisLivraison} FCFA**\n\n`;
-    if (userState.besoinOrdonnance) {
-      message += `⚠️ **ATTENTION**\n`;
-      message += `Votre panier contient des médicaments nécessitant une ordonnance.\n`;
-      message += `Vous devrez envoyer une photo de votre ordonnance.\n\n`;
-    }
-    return message;
-  }
-};
-
-// Module Validation Pharmacie
-const pharmacieValidator = {
-  async envoyerOrdonnancePharmacie(commandeId, photoUrl, pharmacieId) {
-    try {
-      const pharmacieDoc = await db.collection('pharmacies').doc(pharmacieId).get();
-      if (!pharmacieDoc.exists) return { success: false, message: "Pharmacie introuvable" };
-      const pharmacie = pharmacieDoc.data();
-      const message = this.creerMessageValidation(commandeId, photoUrl);
-      await this.envoyerMessagePharmacie(pharmacie.telephone, message, photoUrl, commandeId);
-      await db.collection('commandes').doc(commandeId).update({
-        statut: 'en_validation_pharmacie',
-        pharmacieId: pharmacieId,
-        pharmacieNom: pharmacie.nom,
-        dateEnvoiValidation: Date.now(),
-        ordonnancePhotoUrl: photoUrl
-      });
-      return { success: true, pharmacie: pharmacie };
-    } catch (error) {
-      console.error("Erreur envoi validation pharmacie:", error);
-      return { success: false, message: error.message };
-    }
-  },
-
-  creerMessageValidation(commandeId, photoUrl) {
-    return `🏥 **VALIDATION D'ORDONNANCE**\n\n` +
-           `Une nouvelle ordonnance nécessite votre validation.\n\n` +
-           `🆔 Commande: #${commandeId.substring(0, 8)}\n\n` +
-           `Veuillez vérifier l'ordonnance ci-jointe et valider ou refuser la commande.`;
-  },
-
-  async envoyerMessagePharmacie(telephonePharmacie, message, photoUrl, commandeId) {
-    try {
-      await axios.post(
-        `https://graph.facebook.com/v19.0/${CONFIG.PHONE_NUMBER_ID}/messages`,
-        {
-          messaging_product: "whatsapp",
-          recipient_type: "individual",
-          to: telephonePharmacie,
-          type: "image",
-          image: { link: photoUrl, caption: "📋 Ordonnance du client" }
-        },
-        { headers: { 'Authorization': `Bearer ${CONFIG.WHATSAPP_TOKEN}`, 'Content-Type': 'application/json' } }
-      );
-      const buttons = [
-        { type: "reply", reply: { id: `valider_ordonnance_${commandeId}`, title: "✅ Valider" } },
-        { type: "reply", reply: { id: `refuser_ordonnance_${commandeId}`, title: "❌ Refuser" } }
-      ];
-      await sendInteractiveMessage(telephonePharmacie, message, buttons);
-    } catch (error) {
-      console.error("Erreur envoi message pharmacie:", error);
-    }
-  },
-
-  async handleReponsePharmacie(telephonePharmacie, buttonId, commandeId, reponse) {
-    try {
-      const commandeDoc = await db.collection('commandes').doc(commandeId).get();
-      if (!commandeDoc.exists) return;
-      const commande = commandeDoc.data();
-      if (reponse === 'valider') {
-        await db.collection('commandes').doc(commandeId).update({
-          statut: 'ordonnance_validee',
-          ordonnanceValidee: true,
-          pharmacieValidee: true,
-          dateValidation: Date.now()
-        });
-        await sendTextMessage(commande.client.telephone,
-          `✅ **Ordonnance validée, ${commande.client.nom || "vous"}!**\n\n` +
-          `Votre ordonnance a été validée par la pharmacie **${commande.pharmacieNom}**.` +
-          `\n\nPour finaliser votre commande, nous avons besoin de vos informations de livraison :` +
-          `\n\n1. **Votre nom et prénom**` +
-          `\n2. **Votre quartier**` +
-          `\n3. **Votre numéro WhatsApp**` +
-          `\n4. **Un numéro à joindre** (pour le livreur)` +
-          `\n5. **Indications pour trouver l'emplacement**` +
-          `\n\n📝 **Format attendu** :` +
-          `\nNom: [votre nom]` +
-          `\nQuartier: [votre quartier]` +
-          `\nWhatsApp: [votre numéro]` +
-          `\nÀ joindre: [numéro]` +
-          `\nIndications: [détails]` +
-          `\n\nEnvoyez ces informations pour que nous puissions organiser la livraison.`
-        );
-        const userState = userStates.get(commande.client.telephone) || { ...DEFAULT_STATE };
-        userState.step = 'ATTENTE_INFOS_LIVRAISON_ORDONNANCE';
-        userState.commandeEnCours = commandeId;
-        userStates.set(commande.client.telephone, userState);
-      } else if (reponse === 'refuser') {
-        await db.collection('commandes').doc(commandeId).update({
-          statut: 'ordonnance_refusee',
-          ordonnanceValidee: false,
-          pharmacieValidee: false,
-          dateRefus: Date.now()
-        });
-        await sendTextMessage(commande.client.telephone,
-          `❌ **Ordonnance refusée, ${commande.client.nom || "vous"}**\n\n` +
-          `La pharmacie a refusé votre ordonnance.\n\n` +
-          `Nous transférons votre commande à une autre pharmacie de garde.\n\n` +
-          `Nous vous recontacterons sous peu.`
-        );
-        await this.trouverAutrePharmacie(commandeId);
-      }
-    } catch (error) {
-      console.error("Erreur gestion réponse pharmacie:", error);
-    }
-  },
-
-  async trouverAutrePharmacie(commandeId) {
-    try {
-      const commandeDoc = await db.collection('commandes').doc(commandeId).get();
-      if (!commandeDoc.exists) return;
-      const commande = commandeDoc.data();
-      const autresPharmacies = await getPharmaciesDeGarde();
-      const autresPharmaciesDispo = autresPharmacies.filter(p => p.id !== commande.pharmacieId);
-      if (autresPharmaciesDispo.length > 0) {
-        const nouvellePharmacie = autresPharmaciesDispo[0];
-        await db.collection('commandes').doc(commandeId).update({
-          pharmacieId: nouvellePharmacie.id,
-          pharmacieNom: nouvellePharmacie.nom,
-          statut: 'en_validation_pharmacie',
-          pharmaciePrecedente: commande.pharmacieId
-        });
-        await this.envoyerOrdonnancePharmacie(commandeId, commande.ordonnancePhotoUrl, nouvellePharmacie.id);
-        await sendTextMessage(commande.client.telephone,
-          `🔄 **Transfert à une autre pharmacie, ${commande.client.nom || "vous"}**\n\n` +
-          `La pharmacie précédente a refusé l'ordonnance.\n` +
-          `Nous avons transféré votre commande à une autre pharmacie de garde.\n\n` +
-          `Nouvelle pharmacie: ${nouvellePharmacie.nom}\n` +
-          `Tél: ${nouvellePharmacie.telephone}\n\n` +
-          `Attente de validation...`
-        );
-      } else {
-        await db.collection('commandes').doc(commandeId).update({
-          statut: 'annulee',
-          raisonAnnulation: 'Aucune pharmacie disponible'
-        });
-        await sendTextMessage(commande.client.telephone,
-          `❌ **Commande annulée, ${commande.client.nom || "vous"}**\n\n` +
-          `Aucune pharmacie de garde disponible pour valider votre ordonnance.\n\n` +
-          `Veuillez contacter directement une pharmacie.\n` +
-          `📞 Support: ${CONFIG.SUPPORT_PHONE}`
-        );
-      }
-    } catch (error) {
-      console.error("Erreur recherche autre pharmacie:", error);
-    }
-  }
-};
-
-// Module Livreurs
-const livreurManager = {
-  RAPPEL_LIVRAISON_MS: 5 * 60 * 1000,
-
-  async envoyerCommandeLivreur(commandeId, pharmacieId) {
-    try {
-      const livreurs = await getLivreursDisponibles();
-      if (livreurs.length === 0) {
-        console.log("❌ Aucun livreur disponible");
-        return { success: false, message: "Aucun livreur disponible" };
-      }
-      const commandeDoc = await db.collection('commandes').doc(commandeId).get();
-      if (!commandeDoc.exists) return { success: false, message: "Commande introuvable" };
-      const commande = commandeDoc.data();
-      const pharmacieDoc = await db.collection('pharmacies').doc(pharmacieId).get();
-      if (!pharmacieDoc.exists) return { success: false, message: "Pharmacie introuvable" };
-      const pharmacie = pharmacieDoc.data();
-      const livreur = livreurs[0];
-      const messageLivreur = this.creerMessageLivreurDetaille(commande, pharmacie, livreur);
-      await this.envoyerMessageLivreurAmeliore(livreur.telephone, messageLivreur, commandeId, pharmacie);
-      await db.collection('commandes').doc(commandeId).update({
-        statut: 'en_attente_livreur',
-        livreurId: livreur.telephone,
-        livreurNom: `${livreur.prenom} ${livreur.nom}`,
-        livreurTelephone: livreur.telephone,
-        dateEnvoiLivreur: Date.now(),
-        essaisLivreurs: [{ livreurId: livreur.telephone, date: Date.now(), statut: 'en_attente' }],
-        pharmacieCoords: pharmacie.position,
-        clientCoords: commande.livraison
-      });
-      return { success: true, livreur: livreur, commande: commande };
-    } catch (error) {
-      console.error("❌ Erreur envoi livreur:", error);
-      return { success: false, message: error.message };
-    }
-  },
-
-  creerMessageLivreurDetaille(commande, pharmacie, livreur) {
-    const client = commande.client;
-    const montantTotal = commande.montantTotal + commande.fraisLivraison;
-    const positionPharmacie = pharmacie.position;
-    const positionClient = commande.livraison;
-    const lienGoogleMapsPharmacie = `https://www.google.com/maps?q=${positionPharmacie.latitude},${positionPharmacie.longitude}`;
-    const lienGoogleMapsClient = `https://www.google.com/maps?q=${positionClient.latitude},${positionClient.longitude}`;
-    const lienTrajetPharmacieClient = `https://www.google.com/maps/dir/${positionPharmacie.latitude},${positionPharmacie.longitude}/${positionClient.latitude},${positionClient.longitude}/`;
-    return `📦 **NOUVELLE COMMANDE PILLBOX**\n\n` +
-           `🆔 Commande: #${commande.id.substring(0, 8)}\n` +
-           `💰 Montant: ${montantTotal} FCFA\n` +
-           `🚚 Frais livraison: ${commande.fraisLivraison} FCFA\n\n` +
-           `🏥 **PHARMACIE À VISITER**\n` +
-           `• Nom: ${pharmacie.nom}\n` +
-           `• Tél: ${pharmacie.telephone}\n` +
-           `• Adresse: ${pharmacie.adresse || 'BP 225'}\n` +
-           `• Horaires: ${pharmacie.horaires || '24h/24'}\n` +
-           `📍 Localisation: ${lienGoogleMapsPharmacie}\n\n` +
-           `👤 **CLIENT À LIVRER**\n` +
-           `• Nom: ${client.nom}\n` +
-           `• WhatsApp: ${client.whatsapp}\n` +
-           `• À joindre: ${client.aJoindre}\n` +
-           `• Quartier: ${commande.livraison.quartier}\n` +
-           `• Indications: ${commande.livraison.indications}\n` +
-           `📍 Localisation: ${lienGoogleMapsClient}\n\n` +
-           `🛣️ **TRAJET COMPLET**\n` +
-           `Votre position → Pharmacie → Client\n` +
-           `📍 Voir le trajet: ${lienTrajetPharmacieClient}\n\n` +
-           `💬 **COMMUNICATION**\n` +
-           `• Pour contacter la pharmacie: ${pharmacie.telephone}\n` +
-           `• Pour contacter le client: ${client.aJoindre}\n\n` +
-           `⏰ **À livrer dans les plus brefs délais**`;
-  },
-
-  async envoyerMessageLivreurAmeliore(telephoneLivreur, message, commandeId, pharmacie) {
-    try {
-      const buttons = [
-        { type: "reply", reply: { id: `accepter_${commandeId}`, title: "✅ Accepter" } },
-        { type: "reply", reply: { id: `refuser_${commandeId}`, title: "❌ Refuser" } }
-      ];
-      await sendInteractiveMessage(telephoneLivreur, message, buttons);
-      setTimeout(async () => { await this.verifierReponseLivreur(commandeId); }, this.RAPPEL_LIVRAISON_MS);
-    } catch (error) {
-      console.error("Erreur envoi message livreur:", error);
-    }
-  },
-
-  async verifierReponseLivreur(commandeId) {
-    try {
-      const commandeDoc = await db.collection('commandes').doc(commandeId).get();
-      if (!commandeDoc.exists) return;
-      const commande = commandeDoc.data();
-      if (commande.statut === 'en_attente_livreur') {
-        await sendTextMessage(commande.livreurTelephone, `⏰ **RAPPEL - Commande #${commandeId.substring(0, 8)}**\n\nVeuillez accepter ou refuser cette commande.`);
-        await db.collection('commandes').doc(commandeId).update({ rappelEnvoye: true, dateRappel: Date.now() });
-      }
-    } catch (error) {
-      console.error("Erreur vérification réponse livreur:", error);
-    }
-  },
-
-  async handleReponseLivreur(telephoneLivreur, buttonId, commandeId, reponse) {
-    try {
-      const commandeDoc = await db.collection('commandes').doc(commandeId).get();
-      if (!commandeDoc.exists) return;
-      const commande = commandeDoc.data();
-      if (reponse === 'accepter') {
-        await db.collection('commandes').doc(commandeId).update({
-          statut: 'en_cours_livraison',
-          livreurAccepte: true,
-          dateAcceptation: Date.now(),
-          'essaisLivreurs.0.statut': 'accepte'
-        });
-        await this.notifierClientLivraisonEnCours(commande);
-        await this.envoyerBoutonsActionLivreur(telephoneLivreur, commande);
-      } else if (reponse === 'refuser') {
-        await db.collection('commandes').doc(commandeId).update({
-          livreurAccepte: false,
-          livreurRefuse: true,
-          dateRefus: Date.now(),
-          'essaisLivreurs.0.statut': 'refuse'
-        });
-        await sendTextMessage(telephoneLivreur, `❌ **Commande refusée.**\n\nNous allons contacter un autre livreur.`);
-        await this.trouverAutreLivreur(commandeId);
-      }
-    } catch (error) {
-      console.error("Erreur gestion réponse livreur:", error);
-    }
-  },
-
-  async notifierClientLivraisonEnCours(commande) {
-    try {
-      await sendTextMessage(commande.client.telephone,
-        `🚗 **LIVRAISON EN COURS, ${commande.client.nom || "vous"}!**\n\n` +
-        `Votre commande #${commande.id.substring(0, 8)} a été acceptée par un livreur.\n\n` +
-        `👤 **Votre livreur:**\n` +
-        `• Nom: ${commande.livreurNom}\n` +
-        `• Tél: ${commande.livreurTelephone}\n\n` +
-        `🏥 **Pharmacie:** ${commande.pharmacieNom}\n\n` +
-        `💬 **Communiquez avec votre livreur** directement sur WhatsApp:\n` +
-        `👉 [Ouvrir la conversation](https://wa.me/${commande.livreurTelephone.replace('+', '')})\n\n` +
-        `📱 Ou répondez à ce message (il sera transféré au livreur).`
-      );
-    } catch (error) {
-      console.error("Erreur notification client:", error);
-    }
-  },
-
-  async trouverAutreLivreur(commandeId) {
-    try {
-      const commandeDoc = await db.collection('commandes').doc(commandeId).get();
-      if (!commandeDoc.exists) return;
-      const commande = commandeDoc.data();
-      const essaisLivreurs = commande.essaisLivreurs || [];
-      const livreursContactes = essaisLivreurs.map(e => e.livreurId);
-      const tousLivreurs = await getLivreursDisponibles();
-      const nouveauLivreur = tousLivreurs.find(l => !livreursContactes.includes(l.telephone));
-      if (nouveauLivreur) {
-        const nouveauxEssais = [...essaisLivreurs, { livreurId: nouveauLivreur.telephone, date: Date.now(), statut: 'en_attente' }];
-        await db.collection('commandes').doc(commandeId).update({
-          livreurId: nouveauLivreur.telephone,
-          livreurNom: `${nouveauLivreur.prenom} ${nouveauLivreur.nom}`,
-          livreurTelephone: nouveauLivreur.telephone,
-          essaisLivreurs: nouveauxEssais
-        });
-        await this.envoyerCommandeLivreur(commandeId, commande.pharmacieId);
-      } else {
-        await db.collection('commandes').doc(commandeId).update({
-          statut: 'annulee',
-          raisonAnnulation: 'Aucun livreur disponible'
-        });
-        await sendTextMessage(commande.client.telephone,
-          `❌ **Commande annulée, ${commande.client.nom || "vous"}**\n\n` +
-          `Aucun livreur disponible pour le moment.\n\n` +
-          `Veuillez réessayer plus tard ou contacter le support: ${CONFIG.SUPPORT_PHONE}`
-        );
-      }
-    } catch (error) {
-      console.error("Erreur recherche autre livreur:", error);
-    }
-  },
-
-  async envoyerBoutonsActionLivreur(telephoneLivreur, commande) {
-    try {
-      const message = `✅ **Commande acceptée!**\n\n` +
-        `Commande #${commande.id.substring(0, 8)}\n\n` +
-        `🎯 **ÉTAPES:**\n` +
-        `1. Récupérer à la pharmacie\n` +
-        `2. Livrer au client\n\n` +
-        `Cliquez sur les boutons ci-dessous pour chaque étape:`;
-      const buttons = [
-        { type: "reply", reply: { id: `aller_recuperer_${commande.id}`, title: "🏥 Aller récupérer" } },
-        { type: "reply", reply: { id: `deja_recupere_${commande.id}`, title: "✅ Déjà récupéré" } },
-        { type: "reply", reply: { id: `contacter_pharmacie_${commande.id}`, title: "📞 Contacter pharmacie" } }
-      ];
-      await sendInteractiveMessage(telephoneLivreur, message, buttons);
-    } catch (error) {
-      console.error("Erreur envoi boutons action:", error);
-    }
-  },
-
-  async handleChatClientLivreur(message, from, to) {
-    try {
-      const commandesSnapshot = await db.collection('commandes')
-        .where('chatActive', '==', true)
-        .get();
-      for (const doc of commandesSnapshot.docs) {
-        const commande = doc.data();
-        const isClient = from === commande.client.telephone;
-        const isLivreur = from === commande.livreurTelephone;
-        if (isClient || isLivreur) {
-          const destinataire = isClient ? commande.livreurTelephone : commande.client.telephone;
-          const expediteurNom = isClient ? commande.client.nom : commande.livreurNom;
-          await db.collection('chats').add({
-            commandeId: doc.id,
-            expediteur: from,
-            destinataire: destinataire,
-            expediteurNom: expediteurNom,
-            message: message,
-            timestamp: Date.now(),
-            type: 'text'
-          });
-          const prefix = isClient ? '👤 Client: ' : '🚗 Livreur: ';
-          await sendTextMessage(destinataire, `${prefix}${message}`);
-          return true;
-        }
-      }
-      return false;
-    } catch (error) {
-      console.error("Erreur gestion chat:", error);
-      return false;
-    }
-  }
-};
-
-// Fonctions de gestion des intentions
-async function analyserReponseGroq(userId, userMessage, groqResponse, userState) {
-  try {
-    const texteLower = groqResponse.toLowerCase();
-    
-    if (texteLower.includes("pharmacie") && texteLower.includes("garde")) {
-      console.log(`[GROQ] Détection pharmacie de garde`);
-      await afficherPharmaciesDeGarde(userId);
-    }
-    else if (texteLower.includes("médicament") || texteLower.includes("paracétamol") || texteLower.includes("ibuprofène") || texteLower.includes("amoxicilline")) {
-      console.log(`[GROQ] Détection médicament`);
-      const nomMedicament = extraireNomMedicament(userMessage);
-      if (nomMedicament) {
-        await afficherMedicamentsFiltres(userId, nomMedicament);
-      }
-    }
-    else if (texteLower.includes("rendez-vous") || texteLower.includes("médecin") || texteLower.includes("docteur")) {
-      console.log(`[GROQ] Détection rendez-vous`);
-      await gererRendezVous(userId, userMessage, userState);
-    }
-    
-  } catch (error) {
-    console.error("Erreur analyse réponse Groq:", error);
-  }
-}
-
-async function gererIntention(userId, message, intention, userState) {
-  try {
-    console.log(`[ACTION] Exécution: ${intention.action} pour "${message}"`);
-    
-    // Si intention faible mais pas inconnue, utiliser Groq pour confirmation
-    if (intention.nom === "INCONNU" || intention.poids < 8) {
-      console.log(`[ACTION] Intention faible (poids: ${intention.poids}), utilisation de Groq`);
-      
-      const groqResponse = await getGroqAIResponse(message);
-      await sendTextMessage(userId, groqResponse);
-      
-      await analyserReponseGroq(userId, message, groqResponse, userState);
-      return;
-    }
-    
-    switch (intention.action) {
-      case "repondre_salutation":
-        const reponse = detecterEtRepondreSalutations(message);
-        if (reponse) await sendTextMessage(userId, reponse);
-        break;
-        
-      case "afficher_pharmacies_garde":
-        await afficherPharmaciesDeGarde(userId);
-        break;
-        
-      case "rechercher_medicament":
-        await gererAchatMedicament(userId, message, userState);
-        break;
-        
-      case "prise_rendez_vous":
-        await gererRendezVous(userId, message, userState);
-        break;
-        
-      case "verifier_prix_stock":
-        await gererPrixDisponibilite(userId, message, userState);
-        break;
-        
-      case "donner_conseil_sante":
-        await donnerConseilSante(userId, message, userState);
-        break;
-        
-      case "confirmer_san_pedro":
-        await confirmerSanPedro(userId);
-        break;
-        
-      case "orienter_support":
-        await orienterSupport(userId, message);
-        break;
-        
-      case "gerer_panier":
-        await gererPanier(userId, message, userState);
-        break;
-        
-      case "demander_clarification":
-        await demanderClarification(userId, message, userState);
-        break;
-        
-      default:
-        await reponseParDefaut(userId, message);
-    }
-  } catch (error) {
-    console.error(`Erreur dans gererIntention (${intention.nom}):`, error);
-    await gererErreur(userId, error, userState);
-  }
-}
-
-async function gererAchatMedicament(userId, message, userState) {
-  console.log(`[ACHAT] Traitement: "${message}"`);
-  
-  const medicamentTrouve = extraireNomMedicament(message);
-  
-  if (medicamentTrouve) {
-    await sendTextMessage(
-      userId,
-      `💊 **Je vais vérifier "${medicamentTrouve}" dans les pharmacies de San Pedro...**\n\n` +
-      `📍 **Rappel :** Notre service de livraison est exclusivement pour San Pedro.`
-    );
-    
-    await afficherMedicamentsFiltres(userId, medicamentTrouve);
-    userState.step = "ATTENTE_COMMANDE_MEDICAMENT_FILTRE";
-  } else if (message.toLowerCase().includes("médicament") || message.toLowerCase().includes("medicament")) {
-    await sendTextMessage(
-      userId,
-      `🛒 **Je comprends que vous voulez acheter un médicament !**\n\n` +
-      `Pour vous aider, j'ai besoin de savoir :\n\n` +
-      `1. **Quel médicament** recherchez-vous ?\n` +
-      `   Ex: "paracétamol 500mg", "ibuprofène", "amoxicilline"\n\n` +
-      `2. **Avez-vous une ordonnance ?**\n` +
-      `   ⚠️ Certains médicaments nécessitent une ordonnance\n\n` +
-      `3. **Êtes-vous à San Pedro ?**\n` +
-      `   🚚 Notre livraison est disponible uniquement à San Pedro\n\n` +
-      `📝 **Répondez avec le nom du médicament ou envoyez une photo de l'ordonnance.**`
-    );
-    userState.step = "ATTENTE_NOM_MEDICAMENT";
-  } else {
-    const groqResponse = await getGroqAIResponse(message);
-    await sendTextMessage(userId, groqResponse);
-  }
-  
-  userStates.set(userId, userState);
-}
-
-async function gererRendezVous(userId, message, userState) {
-  const specialites = [
-    "dermatologue", "gynécologue", "pédiatre", "cardiologue",
-    "médecin généraliste", "ophtalmologue", "dentiste",
-    "psychologue", "nutritionniste", "kinésithérapeute"
-  ];
-  
-  let specialiteTrouvee = null;
-  for (const specialite of specialites) {
-    if (message.toLowerCase().includes(specialite)) {
-      specialiteTrouvee = specialite;
-      break;
-    }
-  }
-  
-  if (specialiteTrouvee) {
-    await sendTextMessage(
-      userId,
-      `👨⚕️ **Je cherche un ${specialiteTrouvee} à San Pedro...**\n\n` +
-      `Un instant pendant que je consulte nos cliniques partenaires.`
-    );
-    
-    const medecins = await rechercherMedecinsParSpecialite(specialiteTrouvee);
-    if (medecins.length > 0) {
-      let messageMedecins = `✅ **${specialiteTrouvee}s disponibles à San Pedro :**\n\n`;
-      userState.listeMedecins = medecins;
-      
-      for (const [index, medecin] of medecins.entries()) {
-        messageMedecins += `${index + 1}. **${medecin.nomComplet || 'Docteur'}**\n`;
-        messageMedecins += `   🏥 ${medecin.centreSanteNom || 'Clinique'}\n`;
-        if (medecin.specialite) {
-          messageMedecins += `   🩺 ${medecin.specialite}\n`;
-        }
-        messageMedecins += `\n`;
-      }
-      
-      messageMedecins += `Pour choisir un médecin, répondez avec son numéro.\nExemple : *1*`;
-      
-      await sendTextMessage(userId, messageMedecins);
-      userState.step = "ATTENTE_SELECTION_MEDECIN";
-    } else {
-      await sendTextMessage(
-        userId,
-        `❌ **Aucun ${specialiteTrouvee} disponible pour le moment à San Pedro.**\n\n` +
-        `💡 **Suggestions :**\n` +
-        `• Essayez une autre spécialité\n` +
-        `• Contactez une clinique directement\n` +
-        `• Réessayez plus tard`
-      );
-    }
-  } else {
-    await sendTextMessage(
-      userId,
-      `📅 **Je peux vous aider à prendre rendez-vous à San Pedro !**\n\n` +
-      `Avec quel type de **médecin** souhaitez-vous consulter ?\n\n` +
-      `👨⚕️ **Exemples de spécialités :**\n` +
-      `• Médecin généraliste\n` +
-      `• Dermatologue\n` +
-      `• Gynécologue\n` +
-      `• Pédiatre\n` +
-      `• Cardiologue\n` +
-      `• Dentiste\n\n` +
-      `📝 **Répondez avec la spécialité souhaitée.**`
-    );
-    userState.step = "ATTENTE_SPECIALITE_RDV";
-  }
-  
-  userStates.set(userId, userState);
-}
-
-async function rechercherMedecinsParSpecialite(specialite) {
-  try {
-    const centresSante = await getCentresSante();
-    const medecins = [];
-    for (const centre of centresSante) {
-      const medecinsCentre = await getMedecinsParClinique(centre.id);
-      medecins.push(...medecinsCentre.filter(m => m.specialite && m.specialite.toLowerCase().includes(specialite.toLowerCase())));
-    }
-    return medecins;
-  } catch (error) {
-    console.error("Erreur recherche médecins par spécialité:", error);
-    return [];
-  }
-}
-
-async function demanderDateHeureRendezVous(userId, medecinNom, cliniqueNom) {
-  await sendTextMessage(
-    userId,
-    `📅 **Choisissez une date et une heure pour votre rendez-vous avec ${medecinNom}**\n\n` +
-    `Veuillez indiquer la **date** (ex: *25/12/2025*) et l'**heure** (ex: *14:30*) de votre choix.\n` +
-    `📝 **Format attendu** : *JJ/MM/AAAA HH:MM*\n` +
-    `Exemple : *25/12/2025 14:30*`
-  );
-}
-
-async function confirmerRendezVous(userId, userState) {
-  let message = `🔍 **Confirmation de votre rendez-vous** :\n\n`;
-  message += `👨⚕️ **Médecin** : ${userState.medecinNom}\n`;
-  message += `🏥 **Clinique** : ${userState.cliniqueNom}\n`;
-  message += `📅 **Date/Heure** : ${userState.dateRendezVous.toLocaleString('fr-FR')}\n\n`;
-  message += `Pour **confirmer**, répondez : *OUI*\n`;
-  message += `Pour **annuler**, répondez : *NON*.`;
-  await sendTextMessage(userId, message);
-  userState.step = "ATTENTE_CONFIRMATION_RENDEZ_VOUS";
-  userStates.set(userId, userState);
-}
-
-async function finaliserRendezVous(userId, userState) {
-  const result = await creerRendezVous(
-    userState.cliniqueId,
-    userState.medecinId,
-    null,
-    userState.nom || "Client Pillbox",
-    userId,
-    userState.dateRendezVous,
-    "Rendez-vous pris via WhatsApp"
-  );
-  if (result.success) {
-    await sendTextMessage(
-      userId,
-      `✅ **Rendez-vous confirmé !** 🎉\n\n` +
-      `📝 **ID Rendez-vous** : #${result.rendezVousId.substring(0, 8)}\n` +
-      `👨⚕️ **Médecin** : ${userState.medecinNom}\n` +
-      `🏥 **Clinique** : ${userState.cliniqueNom}\n` +
-      `📅 **Date/Heure** : ${userState.dateRendezVous.toLocaleString('fr-FR')}\n\n` +
-      `🔔 **Un rappel vous sera envoyé 24h avant le rendez-vous.**`
-    );
-  } else {
-    await sendTextMessage(userId, `❌ **Erreur** : ${result.message}`);
-  }
-  userState.step = "MENU_PRINCIPAL";
-  userStates.set(userId, userState);
-}
-
-async function gererPrixDisponibilite(userId, message, userState) {
-  const nomMedicament = extraireNomMedicament(message);
-  
-  if (nomMedicament) {
-    await sendTextMessage(
-      userId,
-      `💰 **Je vérifie le prix et la disponibilité de "${nomMedicament}" à San Pedro...**`
-    );
-    
-    const medicamentsParPharmacie = await rechercherMedicamentDansPharmacies(nomMedicament);
-    
-    if (Object.keys(medicamentsParPharmacie).length > 0) {
-      let messagePrix = `📊 **Prix et disponibilité pour "${nomMedicament}" :**\n\n`;
-      
-      for (const pharmacieId in medicamentsParPharmacie) {
-        const { pharmacie, medicaments } = medicamentsParPharmacie[pharmacieId];
-        if (!pharmacie || medicaments.length === 0) continue;
-        
-        messagePrix += `🏥 **${pharmacie.nom}**\n`;
-        
-        for (const medicament of medicaments) {
-          messagePrix += `   💊 ${medicament.nom || medicament.name}\n`;
-          messagePrix += `   💰 Prix : ${medicament.prix || medicament.price || '?'} FCFA\n`;
-          messagePrix += `   📦 Stock : ${medicament.stock || medicament.quantity || 0} unités\n`;
-          messagePrix += `   ${medicament.necessiteOrdonnance ? '⚠️ Ordonnance requise' : '✅ Sans ordonnance'}\n\n`;
-        }
-      }
-      
-      messagePrix += `🛒 **Pour commander :**\n`;
-      messagePrix += `Répondez : *COMMANDER [numéro-pharmacie] [quantité]*\n`;
-      messagePrix += `Exemple : *COMMANDER 1 2*`;
-      
-      await sendTextMessage(userId, messagePrix);
-    } else {
-      await sendTextMessage(
-        userId,
-        `❌ **"${nomMedicament}" n'est pas disponible pour le moment dans nos pharmacies partenaires à San Pedro.**\n\n` +
-        `💡 **Suggestions :**\n` +
-        `• Vérifiez l'orthographe\n` +
-        `• Essayez un médicament similaire\n` +
-        `• Contactez une pharmacie de garde`
-      );
-    }
-  } else {
-    await sendTextMessage(
-      userId,
-      `💰 **Je peux vérifier le prix et la disponibilité d'un médicament !**\n\n` +
-      `Pour quel **médicament** souhaitez-vous connaître le prix ?\n\n` +
-      `💡 **Exemples :**\n` +
-      `• "Quel est le prix du paracétamol ?"\n` +
-      `• "Est-ce que vous avez de l'ibuprofène en stock ?"\n` +
-      `• "Disponibilité amoxicilline 500mg"\n\n` +
-      `📝 **Mentionnez le nom du médicament.**`
-    );
-  }
-}
-
-async function confirmerSanPedro(userId) {
-  await sendTextMessage(
-    userId,
-    `📍 **Pillbox - Service exclusif San Pedro**\n\n` +
-    `✅ **Oui, nous sommes à San Pedro, Côte d'Ivoire !**\n\n` +
-    `🏙️ **Zone de service :**\n` +
-    `• Livraison : Uniquement San Pedro\n` +
-    `• Pharmacies : Partenaires locaux\n` +
-    `• Cliniques : Partenaires locaux\n\n` +
-    `🚚 **Livraison disponible dans :**\n` +
-    `• Tous les quartiers de San Pedro\n` +
-    `• 7j/7 jusqu'à 22h\n` +
-    `• Frais selon la distance\n\n` +
-    `💡 **Pour utiliser nos services :**\n` +
-    `1. Confirmez que vous êtes à San Pedro\n` +
-    `2. Dites-nous ce dont vous avez besoin\n` +
-    `3. Nous organisons le reste !`
-  );
-}
-
-async function donnerConseilSante(userId, message, userState) {
-  const promptConseil = `
-  L'utilisateur demande des conseils santé pour: "${message}"
-  
-  Donne un conseil général et empathique, mais rappelle toujours de consulter un professionnel.
-  Sois rassurant mais pas alarmiste.
-  Maximum 3 phrases.
-  Ajoute un emoji pertinent.
-  `;
-  
-  const conseil = await getGroqAIResponse(promptConseil);
-  await sendTextMessage(userId, conseil);
-  
-  await sendTextMessage(
-    userId,
-    "⚠️ **Rappel important :**\n" +
-    "Ces conseils sont généraux. Pour un avis médical personnalisé, " +
-    "consultez un médecin ou un professionnel de santé.\n\n" +
-    "🏥 **Besoin d'un rendez-vous ?** Je peux vous aider à en prendre un."
-  );
-}
-
-async function orienterSupport(userId, message) {
-  if (message.toLowerCase().includes("urgence médicale") || 
-      message.toLowerCase().includes("samu") ||
-      message.toLowerCase().includes("ambulance")) {
-    
-    await sendTextMessage(
-      userId,
-      "🚨 **URGENCE MÉDICALE DÉTECTÉE** 🚨\n\n" +
-      "Pour toute urgence médicale immédiate :\n\n" +
-      "📞 **SAMU :** 185\n" +
-      "🚑 **Ambulance :** 144\n" +
-      "🏥 **Urgences les plus proches :** Hôpital Général de San Pedro\n\n" +
-      "⚠️ **Ne perdez pas de temps** et contactez les services d'urgence immédiatement !"
-    );
-    
-  } else {
-    await sendTextMessage(
-      userId,
-      "📞 **Support client Pillbox**\n\n" +
-      "Pour toute question, problème ou assistance :\n\n" +
-      "👤 **Contact direct :**\n" +
-      `📱 WhatsApp: ${CONFIG.SUPPORT_PHONE}\n` +
-      "⏰ **Disponibilité :** 7j/7, 8h-22h\n\n" +
-      "💬 **Vous pouvez aussi :**\n" +
-      "• Décrire votre problème ici\n" +
-      "• Envoyer une capture d'écran\n" +
-      "• Donner plus de détails\n\n" +
-      "Nous vous répondrons dans les plus brefs délais ! 😊"
-    );
-  }
-}
-
-async function gererPanier(userId, message, userState) {
-  const texteLower = message.toLowerCase();
-  
-  if (texteLower.includes("panier") || texteLower.includes("mon panier") || texteLower.includes("voir panier")) {
-    const contenuPanier = await panierManager.afficherPanier(userId);
-    await sendTextMessage(userId, contenuPanier);
-    
-    if (userState.panier && userState.panier.length > 0) {
-      const buttons = [
-        { type: "reply", reply: { id: "valider_panier", title: "✅ Valider commande" } },
-        { type: "reply", reply: { id: "vider_panier", title: "🗑️ Vider panier" } },
-        { type: "reply", reply: { id: "continuer_achats", title: "🛍️ Continuer achats" } }
-      ];
-      
-      await sendInteractiveMessage(
-        userId,
-        "Que souhaitez-vous faire avec votre panier ?",
-        buttons
-      );
-    }
-  }
-  else if (texteLower.includes("vider") || texteLower.includes("supprimer")) {
-    userState.panier = [];
-    userState.pharmacieId = null;
-    userState.pharmacieNom = null;
-    userState.besoinOrdonnance = false;
-    userStates.set(userId, userState);
-    
-    await sendTextMessage(
-      userId,
-      "🗑️ **Votre panier a été vidé.**\n\n" +
-      "Vous pouvez maintenant ajouter des médicaments d'une nouvelle pharmacie."
-    );
-  }
-  else if (texteLower.includes("valider") || texteLower.includes("commander") || texteLower.includes("payer")) {
-    await finaliserCommande(userId, userState);
-  }
-}
-
-async function demanderClarification(userId, message, userState) {
-  await sendTextMessage(
-    userId,
-    "💬 **Pour mieux vous aider, pourriez-vous préciser ?**\n\n" +
-    "Je peux vous assister pour :\n\n" +
-    "💊 **Médicaments :**\n" +
-    "\"Je cherche du paracétamol\"\n" +
-    "\"J'ai besoin d'un antibiotique\"\n\n" +
-    "🏥 **Pharmacies :**\n" +
-    "\"Pharmacie de garde ouverte maintenant\"\n" +
-    "\"Où trouver une pharmacie ?\"\n\n" +
-    "📅 **Rendez-vous :**\n" +
-    "\"Je veux voir un médecin\"\n" +
-    "\"Prendre rendez-vous avec un spécialiste\"\n\n" +
-    "🌿 **Conseils :**\n" +
-    "\"Que faire pour la fièvre ?\"\n" +
-    "\"Conseils pour le stress\"\n\n" +
-    "Dites-moi simplement ce dont vous avez besoin ! 😊"
-  );
-}
-
-async function reponseParDefaut(userId, message) {
-  const reponsesParDefaut = [
-    "Je ne suis pas sûr de comprendre. Pouvez-vous reformuler ? 🤔",
-    "Désolé, je n'ai pas saisi votre demande. Pourriez-vous être plus précis ? 🧐",
-    "Je suis principalement là pour vous aider avec :\n• Les médicaments 💊\n• Les pharmacies 🏥\n• Les rendez-vous 📅\n• Les conseils santé 🌿",
-    "Pouvez-vous me dire si vous cherchez un médicament, une pharmacie ou un rendez-vous ? 😊"
-  ];
-  
-  const reponseAleatoire = reponsesParDefaut[Math.floor(Math.random() * reponsesParDefaut.length)];
-  
-  try {
-    const groqResponse = await getGroqAIResponse(
-      `L'utilisateur a dit: "${message}" mais je n'ai pas compris. ` +
-      `Réponds de manière naturelle pour lui demander de clarifier sa demande. ` +
-      `Propose des exemples de ce que je peux faire.`
-    );
-    
-    await sendTextMessage(userId, `${reponseAleatoire}\n\n${groqResponse}`);
-  } catch (error) {
-    await sendTextMessage(userId, reponseAleatoire);
-  }
-}
-
-async function continuerConversation(userId, message, userState) {
-  const groqResponse = await getGroqAIResponse(message);
-  await sendTextMessage(userId, groqResponse);
-  
-  if (userState.step && userState.step.includes("ATTENTE")) {
-    userStates.set(userId, userState);
-  }
-}
-
-// Fonction pour analyser une image de médicament (OCR)
-async function analyserImageMedicament(userId, imageUrl) {
-  try {
-    await sendTextMessage(userId, "🔍 **Analyse de l'image en cours...**\nPatientez quelques secondes.");
-
-    const [result] = await clientVision.textDetection(imageUrl);
-    const detections = result.textAnnotations;
-    const texteExtrait = detections.length > 0 ? detections[0].description : null;
-
-    if (!texteExtrait) {
-      await sendTextMessage(
-        userId,
-        "❌ **Impossible d'extraire le texte de l'image.**\n" +
-        "Veuillez envoyer une photo plus nette ou utiliser la recherche par nom."
-      );
-      return null;
-    }
-
-    const nomMedicament = extraireNomMedicamentOCR(texteExtrait);
-    if (!nomMedicament) {
-      await sendTextMessage(
-        userId,
-        "❌ **Aucun médicament reconnu dans cette image.**\n" +
-        "Essayez avec une autre photo ou tapez le nom du médicament."
-      );
-      return null;
-    }
-
-    await afficherMedicamentsFiltres(userId, nomMedicament);
-    return nomMedicament;
-  } catch (error) {
-    console.error("Erreur analyse OCR:", error);
-    await sendTextMessage(
-      userId,
-      "❌ **Erreur lors de l'analyse de l'image.**\n" +
-      "Veuillez réessayer ou contacter le support."
-    );
-    return null;
-  }
-}
-
-function extraireNomMedicamentOCR(texte) {
-  const motsClesMedicaments = [
-    "paracétamol", "doliprane", "amoxicilline", "ibuprofène", "aspirine",
-    "mg", "comprimé", "gélule", "sirop", "dosage", "500mg", "1g"
-  ];
-
-  const texteNettoye = texte.replace(/[^\w\s]/gi, ' ').replace(/\s+/g, ' ').toLowerCase();
-
-  for (const mot of motsClesMedicaments) {
-    if (texteNettoye.includes(mot)) {
-      const index = texteNettoye.indexOf(mot);
-      const debut = Math.max(0, index - 20);
-      const fin = Math.min(texteNettoye.length, index + 30);
-      return texteNettoye.substring(debut, fin).trim();
-    }
-  }
-
-  return texteNettoye.split(' ').slice(0, 3).join(' ');
-}
-
-// Gestion des messages
-async function handleTextMessage(from, text, userState) {
-  console.log(`[MESSAGE] ${from}: "${text}"`);
   
   if (!userState.initialized) {
-    await envoyerMessageBienvenue(from, userState);
-    return;
-  }
-
-  const isChatMessage = await livreurManager.handleChatClientLivreur(text, from, null);
-  if (isChatMessage) {
-    console.log(`[CHAT] Message chat traité pour ${from}`);
-    return;
-  }
-
-  const reponseSalutation = detecterEtRepondreSalutations(text);
-  if (reponseSalutation) {
-    console.log(`[SALUTATION] Salutation détectée pour ${from}`);
-    await sendTextMessage(from, reponseSalutation);
-    return;
-  }
-
-  const intention = detecterIntentionUtilisateur(text, userState);
-
-  try {
-    await gererIntention(from, text, intention, userState);
-  } catch (error) {
-    console.error('💥 Erreur dans handleTextMessage:', error);
-    await gererErreur(from, error, userState);
+    await sendWhatsAppMessage(
+      userId,
+      "👋 **BIENVENUE CHEZ PILLBOX SAN PEDRO !** 🤗\n\n" +
+      "Je suis Mia, votre assistante médicale intelligente.\n\n" +
+      "🏙️ **NOTRE SERVICE :**\n" +
+      "📍 Exclusivement pour San Pedro\n" +
+      "🚚 Livraison à domicile disponible\n" +
+      "💰 400 FCFA (8h-23h) / 600 FCFA (00h-8h)\n\n" +
+      "💊 **JE PEUX VOUS AIDER À :**\n" +
+      "• Acheter des médicaments (avec/sans ordonnance)\n" +
+      "• Trouver des pharmacies de garde 24h/24\n" +
+      "• Prendre des rendez-vous médicaux\n" +
+      "• Vérifier les prix et disponibilités\n" +
+      "• Donner des conseils santé généraux\n\n" +
+      "💬 **PARLEZ-MOI NATURELLEMENT !**\n" +
+      "Exemples :\n" +
+      '• "Je veux du paracétamol"\n' +
+      '• "Pharmacie ouverte maintenant ?"\n' +
+      '• "Rendez-vous avec dermatologue"\n' +
+      '• "Prix ibuprofène"\n' +
+      '• "J\'ai un problème"\n\n' +
+      "📞 **SUPPORT :** " + CONFIG.SUPPORT_PHONE + "\n\n" +
+      "Comment puis-je vous aider aujourd'hui ? 😊"
+    );
+    
+    userState.initialized = true;
+    userState.nom = "Client";
+    userStates.set(userId, userState);
   }
 }
 
-async function handleCommandeMedicamentFiltre(userId, message, userState) {
+// =================== GESTION DES COMMANDES ===================
+async function traiterCommandeMedicament(userId, message, userState) {
   const commandeRegex = /commander\s+(\d+)\s+(\d+)/i;
   const match = message.match(commandeRegex);
   
@@ -2149,356 +1005,225 @@ async function handleCommandeMedicamentFiltre(userId, message, userState) {
     const numero = parseInt(match[1]);
     const quantite = parseInt(match[2]);
     
+    if (quantite < 1 || quantite > 100) {
+      await sendWhatsAppMessage(userId, "❌ Quantité invalide. Choisissez entre 1 et 100.");
+      return;
+    }
+    
     const medicamentInfo = userState.listeMedicamentsAvecIndex.find(m => m.index === numero);
     
-    if (medicamentInfo && medicamentInfo.medicament) {
-      const result = await panierManager.ajouterAuPanier(userId, medicamentInfo.medicament.id, quantite);
-      
-      if (result.success) {
-        await sendTextMessage(userId, result.message);
-        
-        const buttons = [
-          { type: "reply", reply: { id: "voir_panier", title: "🛒 Voir mon panier" } },
-          { type: "reply", reply: { id: "continuer_achats", title: "💊 Continuer achats" } },
-          { type: "reply", reply: { id: "valider_commande", title: "✅ Valider commande" } }
-        ];
-        
-        await sendInteractiveMessage(
-          userId,
-          "Que souhaitez-vous faire maintenant ?",
-          buttons
-        );
-        
-        userState.step = "MENU_PRINCIPAL";
-        userStates.set(userId, userState);
-      } else {
-        await sendTextMessage(userId, result.message);
-      }
-    } else {
-      await sendTextMessage(userId, "❌ Numéro de médicament invalide. Veuillez réessayer.");
+    if (!medicamentInfo) {
+      await sendWhatsAppMessage(
+        userId,
+        "❌ **Numéro de médicament invalide.**\n\n" +
+        "Veuillez vérifier le numéro dans la liste précédente.\n" +
+        "Les numéros sont ceux affichés à gauche des médicaments."
+      );
+      return;
     }
-  } else {
-    await sendTextMessage(
-      userId,
-      "❌ **Format incorrect.**\n\n" +
-      "Pour commander, utilisez le format :\n" +
-      "*COMMANDER [numéro] [quantité]*\n\n" +
-      "Exemple : *COMMANDER 1 2*"
-    );
-  }
-}
-
-async function finaliserCommande(userId, userState) {
-  if (!userState.panier || userState.panier.length === 0) {
-    await sendTextMessage(userId, "❌ Votre panier est vide. Ajoutez d'abord des médicaments.");
-    return;
-  }
-
-  const commandeId = uuidv4();
-  const fraisLivraison = getFraisLivraison();
-  let total = 0;
-  
-  const items = userState.panier.map(item => {
-    const sousTotal = item.prix * item.quantite;
-    total += sousTotal;
-    return {
-      medicamentId: item.id,
-      nom: item.nom,
-      quantite: item.quantite,
-      prix: item.prix,
-      sousTotal: sousTotal,
-      pharmacieId: item.pharmacieId,
-      necessiteOrdonnance: item.necessiteOrdonnance
+    
+    const medicament = medicamentInfo.medicament;
+    const prixUnitaire = medicament.prix || 0;
+    const prixTotal = prixUnitaire * quantite;
+    const fraisLivraison = getFraisLivraison();
+    const total = prixTotal + fraisLivraison;
+    
+    // Vérifier le stock
+    if (medicament.stock < quantite) {
+      await sendWhatsAppMessage(
+        userId,
+        `❌ **Stock insuffisant.**\n\n` +
+        `Il ne reste que ${medicament.stock} unité(s) disponible(s).\n` +
+        `Veuillez choisir une quantité inférieure ou égale à ${medicament.stock}.`
+      );
+      return;
+    }
+    
+    let messageConfirmation = `✅ **COMMANDE PRÉPARÉE**\n\n`;
+    messageConfirmation += `💊 **${medicament.nom}**\n`;
+    messageConfirmation += `🏥 Pharmacie : ${medicamentInfo.pharmacieNom}\n`;
+    messageConfirmation += `📦 Quantité : ${quantite}\n`;
+    messageConfirmation += `💰 Prix unitaire : ${prixUnitaire} FCFA\n`;
+    messageConfirmation += `🧾 Sous-total : ${prixTotal} FCFA\n`;
+    messageConfirmation += `🚚 Livraison : ${fraisLivraison} FCFA\n`;
+    messageConfirmation += `🎯 **TOTAL À PAYER : ${total} FCFA**\n\n`;
+    
+    if (medicament.necessiteOrdonnance) {
+      messageConfirmation += `⚠️ **ATTENTION : Ordonnance requise**\n`;
+      messageConfirmation += `Vous devrez envoyer une photo de votre ordonnance.\n\n`;
+    }
+    
+    messageConfirmation += `📝 **POUR FINALISER, ENVOYEZ :**\n`;
+    messageConfirmation += `1. Votre nom complet\n`;
+    messageConfirmation += `2. Votre quartier à San Pedro\n`;
+    messageConfirmation += `3. Votre numéro WhatsApp\n`;
+    messageConfirmation += `4. Indications pour la livraison\n\n`;
+    messageConfirmation += `📍 **RAPPEL :** Service uniquement à San Pedro\n\n`;
+    messageConfirmation += `💬 Exemple :\n`;
+    messageConfirmation += `"Nom: Fatou Traoré\n`;
+    messageConfirmation += `Quartier: Résidence du Port\n`;
+    messageConfirmation += `WhatsApp: 07 08 12 34 56\n`;
+    messageConfirmation += `Indications: Immeuble bleu, 3ème étage"`;
+    
+    await sendWhatsAppMessage(userId, messageConfirmation);
+    
+    // Sauvegarder la commande en cours
+    userState.commandeEnCours = {
+      medicamentId: medicament.id,
+      medicamentNom: medicament.nom,
+      pharmacieId: medicamentInfo.pharmacieId,
+      pharmacieNom: medicamentInfo.pharmacieNom,
+      quantite: quantite,
+      prixUnitaire: prixUnitaire,
+      prixTotal: prixTotal,
+      fraisLivraison: fraisLivraison,
+      total: total,
+      necessiteOrdonnance: medicament.necessiteOrdonnance
     };
-  });
-
-  const commandeData = {
-    id: commandeId,
-    client: {
-      nom: userState.nom,
-      whatsapp: userState.whatsapp || userId,
-      aJoindre: userState.aJoindre || userId,
-      quartier: userState.quartier,
-      indications: userState.indications
-    },
-    items: items,
-    montantTotal: total,
-    fraisLivraison: fraisLivraison,
-    total: total + fraisLivraison,
-    pharmacieId: userState.pharmacieId,
-    pharmacieNom: userState.pharmacieNom,
-    statut: 'en_attente_validation',
-    dateCreation: admin.firestore.FieldValue.serverTimestamp(),
-    besoinOrdonnance: userState.besoinOrdonnance,
-    ordonnanceValidee: userState.ordonnanceValidee,
-    ordonnancePhotoUrl: userState.ordonnancePhotoUrl,
-    livraison: {
-      quartier: userState.quartier,
-      indications: userState.indications,
-      latitude: userState.location?.latitude,
-      longitude: userState.location?.longitude
-    },
-    chatActive: true
-  };
-
-  try {
-    await db.collection('commandes').doc(commandeId).set(commandeData);
     
-    for (const item of userState.panier) {
-      await updateStock(item.id, item.quantite);
-    }
-    
-    await sendTextMessage(
-      userId,
-      `🎉 **COMMANDE CONFIRMÉE !**\n\n` +
-      `🆔 **N° Commande :** #${commandeId.substring(0, 8)}\n` +
-      `💰 **Total :** ${total + fraisLivraison} FCFA\n` +
-      `🏥 **Pharmacie :** ${userState.pharmacieNom}\n` +
-      `📍 **Livraison :** ${userState.quartier || 'San Pedro'}\n\n` +
-      `⏳ **Prochaines étapes :**\n` +
-      `1. Validation par la pharmacie\n` +
-      `2. Attribution d'un livreur\n` +
-      `3. Notification de suivi\n\n` +
-      `📞 **Support :** ${CONFIG.SUPPORT_PHONE}\n\n` +
-      `Merci pour votre confiance ! 😊`
-    );
-    
-    userState.panier = [];
-    userState.commandeEnCours = commandeId;
-    userState.step = "MENU_PRINCIPAL";
+    userState.attenteCommande = false;
+    userState.step = 'ATTENTE_INFOS_LIVRAISON';
     userStates.set(userId, userState);
     
-    if (userState.besoinOrdonnance && userState.ordonnancePhotoUrl) {
-      await pharmacieValidator.envoyerOrdonnancePharmacie(commandeId, userState.ordonnancePhotoUrl, userState.pharmacieId);
-    } else {
-      await livreurManager.envoyerCommandeLivreur(commandeId, userState.pharmacieId);
-    }
+  } else if (message.match(/^prix\s+(\d+)$/i)) {
+    const matchPrix = message.match(/^prix\s+(\d+)$/i);
+    const numero = parseInt(matchPrix[1]);
     
-  } catch (error) {
-    console.error('Erreur création commande:', error);
-    await sendTextMessage(userId, "❌ Erreur lors de la création de votre commande. Veuillez réessayer.");
+    const medicamentInfo = userState.listeMedicamentsAvecIndex.find(m => m.index === numero);
+    
+    if (medicamentInfo) {
+      const medicament = medicamentInfo.medicament;
+      await sendWhatsAppMessage(
+        userId,
+        `💰 **${medicament.nom}**\n\n` +
+        `🏥 ${medicamentInfo.pharmacieNom}\n` +
+        `💊 ${medicament.dosage || ''} ${medicament.forme || ''}\n` +
+        `📦 Stock : ${medicament.stock || 0} unités\n` +
+        `${medicament.necessiteOrdonnance ? '⚠️ Ordonnance requise\n' : '✅ Sans ordonnance\n'}` +
+        `\n🛒 **Pour commander :**\n` +
+        `"commander ${numero} [quantité]"`
+      );
+    }
   }
 }
 
-async function envoyerMessageBienvenue(userId, userState) {
-  const messagesBienvenue = [
-    `💊 **Bonjour ${userState.nom || 'cher client'} !** Je suis Mia, votre assistante Pillbox à San Pedro. 🤗\n\n`,
-    `👋 **Salut ${userState.nom || 'là'} !** Mia à votre service, votre assistant médical à San Pedro. 😊\n\n`,
-    `🏥 **Bienvenue ${userState.nom || ''} !** Je suis Mia, je vous aide avec vos besoins santé à San Pedro. 🌟\n\n`
-  ];
+function getFraisLivraison() {
+  const maintenant = new Date();
+  const heure = maintenant.getHours();
+  return (heure >= 0 && heure < 8) ? CONFIG.LIVRAISON_NUIT : CONFIG.LIVRAISON_JOUR;
+}
+
+// =================== TRAITEMENT DES INFORMATIONS ===================
+async function traiterInfosLivraison(userId, message, userState) {
+  // Extraire les informations
+  const lines = message.split('\n');
+  const infos = {};
   
-  const messageAleatoire = messagesBienvenue[Math.floor(Math.random() * messagesBienvenue.length)];
+  lines.forEach(line => {
+    const match = line.match(/^([^:]+):\s*(.+)$/);
+    if (match) {
+      const cle = match[1].trim().toLowerCase().replace(/[^a-z]/g, '');
+      const valeur = match[2].trim();
+      infos[cle] = valeur;
+    }
+  });
   
-  await sendTextMessage(
+  // Vérifier les champs requis
+  const champsRequis = ['nom', 'quartier', 'whatsapp'];
+  const champsManquants = champsRequis.filter(champ => !infos[champ]);
+  
+  if (champsManquants.length > 0) {
+    await sendWhatsAppMessage(
+      userId,
+      `❌ **Informations manquantes :** ${champsManquants.join(', ')}\n\n` +
+      `Veuillez fournir toutes les informations dans le format demandé.\n\n` +
+      `📝 **Format :**\n` +
+      `Nom: Votre nom\n` +
+      `Quartier: Votre quartier\n` +
+      `WhatsApp: Votre numéro\n` +
+      `Indications: Détails supplémentaires`
+    );
+    return;
+  }
+  
+  // Vérifier que c'est à San Pedro
+  if (!infos.quartier.toLowerCase().includes('san pedro') && 
+      !infos.quartier.toLowerCase().includes('san-pedro')) {
+    await sendWhatsAppMessage(
+      userId,
+      "❌ **HORS ZONE DE LIVRAISON**\n\n" +
+      "Désolé, notre service de livraison est exclusivement réservé à **San Pedro**.\n\n" +
+      "📍 **Vous avez indiqué :** " + infos.quartier + "\n\n" +
+      "💡 **Veuillez :**\n" +
+      "1. Confirmer que vous êtes bien à San Pedro\n" +
+      "2. Précisez le quartier exact à San Pedro\n" +
+      "3. Ou utilisez nos services sur place\n\n" +
+      "📞 Pour plus d'informations : " + CONFIG.SUPPORT_PHONE
+    );
+    return;
+  }
+  
+  // Confirmer la commande finale
+  const commande = userState.commandeEnCours;
+  const numeroCommande = `CMD${Date.now().toString().slice(-8)}`;
+  
+  await sendWhatsAppMessage(
     userId,
-    messageAleatoire +
-    `Je suis là pour vous aider à :\n\n` +
-    `💊 **Commander des médicaments** (avec/sans ordonnance)\n` +
-    `🏥 **Trouver des pharmacies de garde** 24h/24\n` +
-    `📅 **Prendre des rendez-vous** médicaux\n` +
-    `🌿 **Donner des conseils santé** généraux\n` +
-    `🚚 **Organiser la livraison** à domicile\n\n` +
-    `📍 **Zone de service :** UNIQUEMENT San Pedro\n` +
-    `💰 **Frais livraison :** 400 FCFA (jour) / 600 FCFA (nuit)\n` +
-    `📞 **Support :** ${CONFIG.SUPPORT_PHONE}\n\n` +
-    `💬 **Parlez-moi naturellement,** comme à un ami !\n` +
-    `Exemple : "Je veux du paracétamol" ou "Pharmacie ouverte ?"\n\n` +
-    `Comment puis-je vous aider aujourd'hui ? 😊`
+    `🎉 **COMMANDE CONFIRMÉE #${numeroCommande}**\n\n` +
+    `👤 **Client :** ${infos.nom}\n` +
+    `📱 WhatsApp : ${infos.whatsapp}\n` +
+    `📍 Quartier : ${infos.quartier}\n` +
+    `📞 À joindre : ${infos.ajoindre || infos.whatsapp}\n` +
+    (infos.indications ? `🗺️ Indications : ${infos.indications}\n\n` : `\n`) +
+    `💊 **Commande :**\n` +
+    `${commande.medicamentNom} × ${commande.quantite}\n` +
+    `🏥 Pharmacie : ${commande.pharmacieNom}\n` +
+    `💰 Total médicaments : ${commande.prixTotal} FCFA\n` +
+    `🚚 Frais livraison : ${commande.fraisLivraison} FCFA\n` +
+    `🎯 **TOTAL À PAYER : ${commande.total} FCFA**\n\n` +
+    `⏳ **PROCHAINES ÉTAPES :**\n` +
+    `1. Validation par la pharmacie\n` +
+    `2. Attribution d'un livreur\n` +
+    `3. Notification de suivi\n` +
+    (commande.necessiteOrdonnance ? `4. Envoi de l'ordonnance requise\n` : ``) +
+    `\n📞 **SUPPORT & SUIVI :**\n` +
+    CONFIG.SUPPORT_PHONE + `\n` +
+    `(Référence : ${numeroCommande})\n\n` +
+    `Merci pour votre confiance ! 😊\n` +
+    `📍 **Service Pillbox San Pedro**`
   );
   
-  userState.initialized = true;
+  if (commande.necessiteOrdonnance) {
+    await sendWhatsAppMessage(
+      userId,
+      `⚠️ **ORDONNANCE REQUISE**\n\n` +
+      `Veuillez envoyer une photo claire de votre ordonnance.\n\n` +
+      `📸 **Comment envoyer :**\n` +
+      `1. Cliquez sur 📎 (attache)\n` +
+      `2. Sélectionnez "Galerie" ou "Appareil photo"\n` +
+      `3. Choisissez la photo de votre ordonnance\n\n` +
+      `⏱️ **Votre commande sera traitée après validation.**`
+    );
+    
+    userState.attentePhotoOrdonnance = true;
+  }
+  
+  // Réinitialiser l'état
+  userState.commandeEnCours = null;
+  userState.resultatsRechercheMedicaments = null;
+  userState.listeMedicamentsAvecIndex = [];
+  userState.step = 'MENU_PRINCIPAL';
   userStates.set(userId, userState);
 }
 
-async function gererErreur(userId, error, userState) {
-  console.error('🔴 ERREUR GÉRÉE:', error.message);
-  
-  const messagesErreur = [
-    "Désolé, une petite erreur s'est produite. Pouvez-vous reformuler votre demande ? 🤔",
-    "Oups ! J'ai rencontré un problème technique. Essayez à nouveau s'il vous plaît. 🔄",
-    "Je rencontre une difficulté momentanée. Pourriez-vous répéter votre demande ? 🙏",
-    "Pardon pour ce contretemps. Je suis à nouveau opérationnelle, que souhaitez-vous ? 😊"
-  ];
-  
-  const messageAleatoire = messagesErreur[Math.floor(Math.random() * messagesErreur.length)];
-  
-  try {
-    const groqResponse = await getGroqAIResponse("L'utilisateur a rencontré une erreur, rassure-le et propose de l'aider à nouveau.");
-    await sendTextMessage(userId, `${messageAleatoire}\n\n${groqResponse}`);
-  } catch (groqError) {
-    await sendTextMessage(userId, messageAleatoire);
-  }
-  
-  if (userState.step && userState.step.includes("ATTENTE")) {
-    userState.step = "MENU_PRINCIPAL";
-    userStates.set(userId, userState);
-  }
-}
-
-async function handleLocationMessage(from, location, userState) {
-  const { latitude, longitude } = location;
-  
-  const isInZone = isInSanPedro(latitude, longitude);
-  
-  if (!isInZone) {
-    await sendTextMessage(
-      from,
-      `❌ **Hors zone de livraison**\n\n` +
-      `Désolé, notre service de livraison est exclusivement réservé à **San Pedro**.\n\n` +
-      `📍 **Vous semblez être en dehors de notre zone de couverture.**\n\n` +
-      `💡 **Solutions :**\n` +
-      `1. Vérifiez que vous êtes bien à San Pedro\n` +
-      `2. Contactez une pharmacie locale\n` +
-      `3. Utilisez nos services sur place`
-    );
-    return;
-  }
-  
-  userState.location = { latitude, longitude };
-  
-  await sendTextMessage(
-    from,
-    `📍 **Localisation confirmée !**\n\n` +
-    `Vous êtes bien dans la zone de livraison San Pedro.\n\n` +
-    `Maintenant, donnez-moi vos informations :\n\n` +
-    `📝 **Format attendu :**\n` +
-    `Nom: Votre nom complet\n` +
-    `Quartier: Votre quartier\n` +
-    `WhatsApp: Votre numéro WhatsApp\n` +
-    `À joindre: Numéro pour le livreur\n` +
-    `Indications: Détails pour trouver l'adresse\n\n` +
-    `Exemple :\n` +
-    `Nom: Fatou Traoré\n` +
-    `Quartier: Résidence du Port\n` +
-    `WhatsApp: +2250708123456\n` +
-    `À joindre: +2250708123456\n` +
-    `Indications: Immeuble bleu, interphone 15`
-  );
-  
-  userState.step = "ATTENTE_INFOS_LIVRAISON";
-  userStates.set(from, userState);
-}
-
-// Fonction utilitaire pour récupérer l'URL d'une image WhatsApp
-async function getWhatsAppMediaUrl(mediaId) {
-  try {
-    const response = await axios.get(
-      `https://graph.facebook.com/v19.0/${mediaId}`,
-      { headers: { 'Authorization': `Bearer ${CONFIG.WHATSAPP_TOKEN}` } }
-    );
-    return response.data.url;
-  } catch (error) {
-    console.error('Erreur récupération média:', error.message);
-    return null;
-  }
-}
-
-// Fonction pour gérer les messages interactifs (boutons)
-async function handleInteractiveMessage(from, buttonId, userState) {
-  if (buttonId.startsWith('accepter_')) {
-    const commandeId = buttonId.replace('accepter_', '');
-    await livreurManager.handleReponseLivreur(from, buttonId, commandeId, 'accepter');
-  }
-  else if (buttonId.startsWith('refuser_')) {
-    const commandeId = buttonId.replace('refuser_', '');
-    await livreurManager.handleReponseLivreur(from, buttonId, commandeId, 'refuser');
-  }
-  else if (buttonId.startsWith('valider_ordonnance_')) {
-    const commandeId = buttonId.replace('valider_ordonnance_', '');
-    await pharmacieValidator.handleReponsePharmacie(from, buttonId, commandeId, 'valider');
-  }
-  else if (buttonId.startsWith('refuser_ordonnance_')) {
-    const commandeId = buttonId.replace('refuser_ordonnance_', '');
-    await pharmacieValidator.handleReponsePharmacie(from, buttonId, commandeId, 'refuser');
-  }
-  else if (buttonId === "pharmacie_garde") {
-    await afficherPharmaciesDeGarde(from);
-  }
-  else if (buttonId === "autre_recherche") {
-    await sendTextMessage(
-      from,
-      "🔍 **Nouvelle recherche**\n\n" +
-      "Quel médicament recherchez-vous ?\n" +
-      "Exemple : paracétamol, ibuprofène, amoxicilline"
-    );
-    userState.step = "ATTENTE_RECHERCHE_MEDICAMENT";
-    userStates.set(from, userState);
-  }
-  else if (buttonId === "support") {
-    await orienterSupport(from, "besoin d'aide");
-  }
-  else if (buttonId === "valider_panier" || buttonId === "valider_commande") {
-    await finaliserCommande(from, userState);
-  }
-  else if (buttonId === "vider_panier") {
-    userState.panier = [];
-    userState.pharmacieId = null;
-    userState.pharmacieNom = null;
-    userState.besoinOrdonnance = false;
-    userStates.set(from, userState);
-    await sendTextMessage(from, "🗑️ **Panier vidé avec succès !**");
-  }
-  else if (buttonId === "continuer_achats" || buttonId === "voir_panier") {
-    const contenuPanier = await panierManager.afficherPanier(from);
-    await sendTextMessage(from, contenuPanier);
-  }
-  else {
-    await sendTextMessage(
-      from,
-      "⚠️ **Option non reconnue.**\n\n" +
-      "Dites-moi simplement ce dont vous avez besoin, je vous guiderai ! 😊"
-    );
-  }
-}
-
-async function verifierDonneesFirestore() {
-  try {
-    console.log('🔍 Vérification des données Firestore...');
-    
-    const collections = ['medicaments', 'pharmacies', 'centres_sante'];
-    const stats = {};
-    
-    for (const collection of collections) {
-      const snapshot = await db.collection(collection).limit(1).get();
-      stats[collection] = {
-        existe: !snapshot.empty,
-        count: snapshot.empty ? 0 : 'chargement...'
-      };
-    }
-    
-    const medicamentsSnapshot = await db.collection('medicaments').where('stock', '>', 0).get();
-    stats.medicaments.count = medicamentsSnapshot.size;
-    
-    const pharmaciesSnapshot = await db.collection('pharmacies')
-      .where('estDeGarde', '==', true)
-      .where('estOuvert', '==', true)
-      .get();
-    stats.pharmacies.deGarde = pharmaciesSnapshot.size;
-    
-    console.log('✅ Données Firestore vérifiées:', stats);
-    
-    return {
-      success: true,
-      stats: stats,
-      message: `Données disponibles: ${medicamentsSnapshot.size} médicaments, ${pharmaciesSnapshot.size} pharmacies de garde`
-    };
-    
-  } catch (error) {
-    console.error('❌ Erreur vérification données:', error);
-    return {
-      success: false,
-      error: error.message
-    };
-  }
-}
-
-// Webhook WhatsApp
+// =================== WEBHOOK WHATSAPP ===================
 app.get('/api/webhook', (req, res) => {
   const mode = req.query['hub.mode'];
   const token = req.query['hub.verify_token'];
   const challenge = req.query['hub.challenge'];
+  
   if (mode && token === CONFIG.VERIFY_TOKEN) {
-    console.log('✅ Webhook vérifié');
+    console.log('✅ Webhook vérifié avec succès');
     res.status(200).send(challenge);
   } else {
     console.log('❌ Échec vérification webhook');
@@ -2508,160 +1233,300 @@ app.get('/api/webhook', (req, res) => {
 
 app.post('/api/webhook', async (req, res) => {
   console.log('📩 Webhook POST reçu');
+  
+  // Répondre immédiatement à WhatsApp
   res.status(200).send('EVENT_RECEIVED');
+  
   try {
     const entry = req.body.entry?.[0];
     const changes = entry?.changes?.[0];
     const value = changes?.value;
     const message = value?.messages?.[0];
-    if (!message) return;
-
-    const from = message.from;
-    const messageType = message.type;
-    let userState = userStates.get(from) || { ...DEFAULT_STATE, nom: "Client Pillbox" };
-
-    if (messageType === 'audio' || messageType === 'voice') return;
-
-    if (messageType === 'text') {
-      await handleTextMessage(from, message.text.body, userState);
+    
+    if (!message) {
+      console.log('📩 Message vide ou non texte');
+      return;
     }
-    else if (messageType === 'image') {
-      const imageId = message.image.id;
-      const imageUrl = await getWhatsAppMediaUrl(imageId);
-      if (userState.attentePhoto) {
-        userState.ordonnancePhotoUrl = imageUrl;
-        userState.attentePhoto = false;
-        await sendTextMessage(
-          from,
+    
+    const userId = message.from;
+    const messageType = message.type;
+    
+    // Récupérer ou créer l'état utilisateur
+    let userState = userStates.get(userId);
+    if (!userState) {
+      userState = { ...DEFAULT_STATE };
+      userStates.set(userId, userState);
+    }
+    
+    if (messageType === 'text') {
+      const text = message.text.body.trim();
+      
+      console.log(`💬 ${userId}: "${text}"`);
+      
+      // Gestion des états spéciaux
+      if (userState.step === 'ATTENTE_INFOS_LIVRAISON') {
+        await traiterInfosLivraison(userId, text, userState);
+        return;
+      }
+      
+      if (userState.attenteCommande || text.toLowerCase().startsWith('commander')) {
+        await traiterCommandeMedicament(userId, text, userState);
+        return;
+      }
+      
+      if (userState.attenteMedicament) {
+        await rechercherEtAfficherMedicament(userId, text);
+        userState.attenteMedicament = false;
+        userStates.set(userId, userState);
+        return;
+      }
+      
+      if (userState.attenteSpecialite) {
+        await chercherCliniquesParSpecialite(userId, text);
+        userState.attenteSpecialite = false;
+        userStates.set(userId, userState);
+        return;
+      }
+      
+      if (userState.attenteMedicamentPrix) {
+        await afficherPrixDisponibilite(userId, text);
+        userState.attenteMedicamentPrix = false;
+        userStates.set(userId, userState);
+        return;
+      }
+      
+      if (userState.attenteSelectionClinique && text.match(/^\d+$/)) {
+        const numero = parseInt(text);
+        const cliniques = userState.listeCliniques || [];
+        
+        if (numero >= 1 && numero <= cliniques.length) {
+          const clinique = cliniques[numero - 1];
+          await sendWhatsAppMessage(
+            userId,
+            `🏥 **${clinique.nom}**\n\n` +
+            `📍 ${clinique.adresse || 'San Pedro'}\n` +
+            `☎ ${clinique.telephone || 'Non disponible'}\n\n` +
+            `📅 **Pour prendre rendez-vous :**\n` +
+            `Contactez directement la clinique ou\n` +
+            `Envoyez-nous vos disponibilités.\n\n` +
+            `📞 **Notre support peut vous aider :**\n` +
+            CONFIG.SUPPORT_PHONE
+          );
+          
+          userState.attenteSelectionClinique = false;
+          userState.listeCliniques = [];
+          userStates.set(userId, userState);
+          return;
+        }
+      }
+      
+      // Messages interactifs
+      if (messageType === 'interactive' && message.interactive?.type === 'button_reply') {
+        const buttonId = message.interactive.button_reply.id;
+        
+        switch (buttonId) {
+          case 'voir_pharmacies_garde':
+            await afficherPharmaciesDeGarde(userId);
+            break;
+          case 'rechercher_autre':
+            await demanderNomMedicament(userId);
+            userState.attenteMedicament = true;
+            break;
+          case 'contacter_support':
+            await donnerSupport(userId);
+            break;
+          case 'voir_toutes_cliniques':
+            await afficherToutesCliniques(userId);
+            break;
+          case 'autre_specialite':
+            await demanderSpecialite(userId);
+            userState.attenteSpecialite = true;
+            break;
+        }
+        
+        userStates.set(userId, userState);
+        return;
+      }
+      
+      // Traitement normal avec Groq
+      await comprendreEtAgir(userId, text);
+      
+      // Mettre à jour l'historique
+      if (!userState.historiqueMessages) {
+        userState.historiqueMessages = [];
+      }
+      userState.historiqueMessages.push({
+        message: text,
+        timestamp: new Date().toISOString()
+      });
+      
+      // Limiter l'historique à 20 messages
+      if (userState.historiqueMessages.length > 20) {
+        userState.historiqueMessages = userState.historiqueMessages.slice(-20);
+      }
+      
+      userStates.set(userId, userState);
+      
+    } else if (messageType === 'image') {
+      // Gestion des images (ordonnances)
+      if (userState.attentePhotoOrdonnance) {
+        await sendWhatsAppMessage(
+          userId,
           "✅ **Ordonnance reçue !**\n\n" +
           "Votre ordonnance a été envoyée à la pharmacie pour validation.\n" +
-          "Vous recevrez une confirmation sous peu."
+          "Nous vous recontacterons dès que possible.\n\n" +
+          "📞 Pour suivre : " + CONFIG.SUPPORT_PHONE
         );
-        const commandeId = userState.commandeEnCours || uuidv4();
-        await pharmacieValidator.envoyerOrdonnancePharmacie(commandeId, imageUrl, userState.pharmacieId);
-      } else {
-        await analyserImageMedicament(from, imageUrl, userState);
+        
+        userState.attentePhotoOrdonnance = false;
+        userStates.set(userId, userState);
       }
     }
-    else if (messageType === 'location') {
-      await handleLocationMessage(from, message.location, userState);
-    }
-    else if (messageType === 'interactive' && message.interactive?.type === 'button_reply') {
-      await handleInteractiveMessage(from, message.interactive.button_reply.id, userState);
-    }
-
-    userStates.set(from, userState);
+    
   } catch (error) {
-    console.error('💥 Erreur webhook:', error.message, error.stack);
+    console.error('💥 ERREUR WEBHOOK:', error.message);
+    console.error(error.stack);
   }
 });
 
-// Health check
+// =================== ENDPOINTS ADMIN ===================
 app.get('/health', (req, res) => {
   res.status(200).json({
     status: 'OK',
     timestamp: new Date().toISOString(),
     service: 'Pillbox WhatsApp Bot PRODUCTION',
-    version: '1.0.0',
+    version: '2.0.0',
     users_actifs: userStates.size,
-    firebase_connected: true,
+    uptime: process.uptime(),
+    memory: process.memoryUsage(),
     support_phone: CONFIG.SUPPORT_PHONE
   });
 });
 
-// Diagnostic endpoint
-app.get('/api/diagnostic', async (req, res) => {
-  try {
-    const [firebaseCheck] = await Promise.all([
-      verifierDonneesFirestore(),
-      db.collection('system_health').doc('diagnostic').set({
-        timestamp: new Date().toISOString(),
-        status: 'checking'
-      })
-    ]);
-    
-    const diagnostic = {
-      timestamp: new Date().toISOString(),
-      server: 'online',
-      firebase: firebaseCheck.success ? 'connected' : 'error',
-      data: firebaseCheck.stats,
-      users_actifs: userStates.size,
-      intentions_stats: intentionStats,
-      memory_usage: process.memoryUsage(),
-      uptime: process.uptime()
-    };
-    
-    res.status(200).json(diagnostic);
-    
-  } catch (error) {
-    res.status(500).json({
-      error: error.message,
-      timestamp: new Date().toISOString()
-    });
-  }
-});
-
-// Test endpoint
-app.get('/api/test-medicaments', async (req, res) => {
-  try {
-    const recherche = req.query.search || 'paracétamol';
-    const result = await rechercherMedicamentDansPharmacies(recherche);
-    
-    res.json({
-      success: true,
-      recherche: recherche,
-      result: result,
-      count: Object.keys(result).length
-    });
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      error: error.message
-    });
-  }
-});
-
-// Monitoring endpoint
-app.get('/api/monitoring', (req, res) => {
+app.get('/api/stats', (req, res) => {
   const stats = {
+    users_actifs: userStates.size,
+    users_details: Array.from(userStates.entries()).map(([id, state]) => ({
+      id: id,
+      step: state.step,
+      initialized: state.initialized,
+      last_active: state.historiqueMessages?.[state.historiqueMessages?.length - 1]?.timestamp
+    })),
     timestamp: new Date().toISOString(),
-    users_active: userStates.size,
     memory: process.memoryUsage(),
-    uptime: process.uptime(),
-    intentions_detected: Object.values(intentionStats || {}).reduce((a, b) => a + b, 0),
-    intentions_detail: intentionStats
+    uptime: process.uptime()
   };
   
   res.json(stats);
 });
 
-// Démarrage du serveur
+app.get('/api/test', async (req, res) => {
+  try {
+    // Test Firebase
+    const medicamentsCount = (await db.collection('medicaments').where('stock', '>', 0).limit(1).get()).size;
+    const pharmaciesCount = (await db.collection('pharmacies').where('estDeGarde', '==', true).limit(1).get()).size;
+    const cliniquesCount = (await db.collection('centres_sante').where('estVerifie', '==', true).limit(1).get()).size;
+    
+    res.json({
+      status: 'OK',
+      firebase: {
+        medicaments: medicamentsCount > 0,
+        pharmacies: pharmaciesCount > 0,
+        cliniques: cliniquesCount > 0
+      },
+      whatsapp: CONFIG.PHONE_NUMBER_ID ? 'Configured' : 'Not configured',
+      groq: CONFIG.GROQ_API_KEY ? 'Configured' : 'Not configured'
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// =================== INITIALISATION ===================
+async function verifierDonneesInitiales() {
+  try {
+    console.log('🔍 Vérification des données initiales...');
+    
+    const collections = ['medicaments', 'pharmacies', 'centres_sante'];
+    const stats = {};
+    
+    for (const collection of collections) {
+      const snapshot = await db.collection(collection).limit(1).get();
+      stats[collection] = !snapshot.empty;
+    }
+    
+    // Compter les médicaments en stock
+    const medicamentsSnapshot = await db.collection('medicaments').where('stock', '>', 0).limit(10).get();
+    stats.medicaments_en_stock = medicamentsSnapshot.size;
+    
+    // Compter les pharmacies de garde
+    const pharmaciesSnapshot = await db.collection('pharmacies')
+      .where('estDeGarde', '==', true)
+      .where('estOuvert', '==', true)
+      .limit(10)
+      .get();
+    stats.pharmacies_de_garde = pharmaciesSnapshot.size;
+    
+    console.log('✅ Données initiales vérifiées:', stats);
+    
+    return stats;
+    
+  } catch (error) {
+    console.error('⚠️ Erreur vérification données:', error.message);
+    return { error: error.message };
+  }
+}
+
+// =================== DÉMARRAGE SERVEUR ===================
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`
-=======================================
-🚀 Pillbox WhatsApp Bot PRODUCTION
+=======================================================
+🚀 PILLBOX WHATSAPP BOT - PRODUCTION V2.0
+=======================================================
 📍 Port: ${PORT}
-💊 Service: Commandes médicaments & Rendez-vous San Pedro
-🤖 IA: Mia (Groq ${CONFIG.GROQ_MODEL})
+🏙️ Zone: San Pedro uniquement
+🤖 Intelligence: Groq (compréhension naturelle)
+💊 Services: Médicaments, RDV, Pharmacies, Conseils
 📞 Support: ${CONFIG.SUPPORT_PHONE}
-=======================================
-Variables requises:
-  ✅ VERIFY_TOKEN: Défini
-  ✅ PHONE_NUMBER_ID: Défini
-  ✅ WHATSAPP_TOKEN: Défini
-  ✅ GROQ_API_KEY: Défini
-  ✅ FIREBASE_PROJECT_ID: Défini
-=======================================
-Statut Firebase: ✅ Connecté
-=======================================
+=======================================================
+✅ PRÊT À RECEVOIR DES MESSAGES !
+✅ Les utilisateurs peuvent parler naturellement
+✅ Compréhension intelligente avec Groq
+✅ Actions automatiques selon la demande
+=======================================================
+Exemples de messages utilisateur :
+• "Je veux du paracétamol"
+• "Pharmacie ouverte maintenant ?"
+• "Rendez-vous avec dermatologue"
+• "Quelles cliniques sont disponibles ?"
+• "Prix ibuprofène"
+• "J'ai un problème pour commander"
+=======================================================
   `);
 });
+
+// Nettoyage périodique des états inactifs
+setInterval(() => {
+  const now = Date.now();
+  const deuxHeures = 2 * 60 * 60 * 1000;
+  
+  for (const [userId, state] of userStates.entries()) {
+    const lastMessage = state.historiqueMessages?.[state.historiqueMessages?.length - 1];
+    if (lastMessage) {
+      const lastActive = new Date(lastMessage.timestamp).getTime();
+      if (now - lastActive > deuxHeures) {
+        console.log(`🧹 Nettoyage état inactif: ${userId}`);
+        userStates.delete(userId);
+      }
+    }
+  }
+}, 30 * 60 * 1000); // Toutes les 30 minutes
 
 // Gestion des erreurs globales
 process.on('uncaughtException', (error) => {
   console.error('💥 ERREUR NON GÉRÉE:', error.message);
-  console.error('Stack:', error.stack);
+  console.error(error.stack);
 });
 
 process.on('unhandledRejection', (reason, promise) => {
