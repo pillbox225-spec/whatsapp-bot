@@ -802,9 +802,62 @@ async function sendWhatsAppMessage(to, text) {
   }
 }
 
+// Fonction pour envoyer l'indicateur de saisie
+async function sendTypingIndicator(userId) {
+  try {
+    await axios.post(
+      `https://graph.facebook.com/v19.0/${CONFIG.PHONE_NUMBER_ID}/messages`,
+      {
+        messaging_product: "whatsapp",
+        recipient_type: "individual",
+        to: userId,
+        type: "interactive",
+        interactive: {
+          type: "typing_on",
+        },
+      },
+      {
+        headers: {
+          'Authorization': `Bearer ${CONFIG.WHATSAPP_TOKEN}`,
+          'Content-Type': 'application/json'
+        },
+        timeout: 10000
+      }
+    );
+  } catch (error) {
+    console.error('❌ Erreur envoi indicateur de saisie:', error.response?.data || error.message);
+  }
+}
+
+// Fonction pour marquer un message comme lu
+async function markMessageAsRead(messageId) {
+  try {
+    await axios.post(
+      `https://graph.facebook.com/v19.0/${CONFIG.PHONE_NUMBER_ID}/messages`,
+      {
+        messaging_product: "whatsapp",
+        status: "read",
+        message_id: messageId,
+      },
+      {
+        headers: {
+          'Authorization': `Bearer ${CONFIG.WHATSAPP_TOKEN}`,
+          'Content-Type': 'application/json'
+        },
+        timeout: 10000
+      }
+    );
+  } catch (error) {
+    console.error('❌ Erreur marquage message comme lu:', error.response?.data || error.message);
+  }
+}
+
 // =================== CERVEAU PRINCIPAL - GROQ ===================
 async function comprendreEtAgir(userId, message) {
   console.log(`🧠 Analyse: "${message}"`);
+
+  // Envoyer l'indicateur de saisie
+  await sendTypingIndicator(userId);
 
   // Mettre à jour le contexte
   const contexte = await gestionnaireContexte.mettreAJourContexte(userId, message, 'user');
@@ -837,6 +890,7 @@ ${resumeContexte}
 
 ## ACTIONS DISPONIBLES:
 - RECHERCHE_MEDICAMENT → si demande de médicament spécifique
+- DEMANDE_NOM_MEDICAMENT → si l'utilisateur veut acheter un médicament mais ne précise pas lequel
 - PHARMACIE_GARDE → si "pharmacie de garde" ou équivalent
 - DEMANDE_RENDEZ_VOUS → si "rendez-vous" ou recherche de spécialiste
 - LISTE_CLINIQUES → si demande de liste de cliniques
@@ -850,12 +904,54 @@ ${resumeContexte}
 - Toujours préciser que le service est uniquement à San Pedro
 
 ## EXEMPLES:
-Utilisateur: "Paracétamol" → {"action":"RECHERCHE_MEDICAMENT","reponse":"Je cherche du paracétamol pour vous...","parametres":{"nom_medicament":"paracétamol"}}
-Utilisateur: "J'ai mal à la tête" → {"action":"CONSEIL_MEDICAL","reponse":"Pour les maux de tête, vous pouvez prendre du paracétamol. Mais si la douleur persiste, consultez un médecin.","parametres":null}
-Utilisateur: "Pharmacie ouverte" → {"action":"PHARMACIE_GARDE","reponse":"Je cherche les pharmacies de garde à San Pedro...","parametres":null}
-Utilisateur: "Je cherche un dermatologue" → {"action":"DEMANDE_RENDEZ_VOUS","reponse":"Je cherche des dermatologues à San Pedro...","parametres":{"specialite":"dermatologue"}}
-Utilisateur: "Quelles cliniques à San Pedro ?" → {"action":"LISTE_CLINIQUES","reponse":"Je recherche les cliniques disponibles à San Pedro...","parametres":null}
-Utilisateur: "Aide" → {"action":"SUPPORT","reponse":"Je peux vous aider pour: médicaments, pharmacies de garde, rendez-vous médicaux. Que souhaitez-vous faire ?","parametres":null}
+Utilisateur: "Paracétamol" →
+{
+  "action": "RECHERCHE_MEDICAMENT",
+  "reponse": "Je cherche du paracétamol pour vous...",
+  "parametres": {"nom_medicament": "paracétamol"}
+}
+
+Utilisateur: "Je veux acheter un médicament" →
+{
+  "action": "DEMANDE_NOM_MEDICAMENT",
+  "reponse": "Quel médicament souhaitez-vous acheter ? Veuillez préciser le nom exact.",
+  "parametres": null
+}
+
+Utilisateur: "J'ai mal à la tête" →
+{
+  "action": "CONSEIL_MEDICAL",
+  "reponse": "Pour les maux de tête, vous pouvez prendre du paracétamol. Mais si la douleur persiste, consultez un médecin.",
+  "parametres": null
+}
+
+Utilisateur: "Pharmacie ouverte" →
+{
+  "action": "PHARMACIE_GARDE",
+  "reponse": "Je cherche les pharmacies de garde à San Pedro...",
+  "parametres": null
+}
+
+Utilisateur: "Je cherche un dermatologue" →
+{
+  "action": "DEMANDE_RENDEZ_VOUS",
+  "reponse": "Je cherche des dermatologues à San Pedro...",
+  "parametres": {"specialite": "dermatologue"}
+}
+
+Utilisateur: "Quelles cliniques à San Pedro ?" →
+{
+  "action": "LISTE_CLINIQUES",
+  "reponse": "Je recherche les cliniques disponibles à San Pedro...",
+  "parametres": null
+}
+
+Utilisateur: "Aide" →
+{
+  "action": "SUPPORT",
+  "reponse": "Je peux vous aider pour: médicaments, pharmacies de garde, rendez-vous médicaux. Que souhaitez-vous faire ?",
+  "parametres": null
+}
 
 JSON uniquement:
 {
@@ -923,6 +1019,12 @@ async function executerAction(userId, result, messageOriginal) {
         userState.attenteMedicament = true;
         userStates.set(userId, userState);
       }
+      break;
+
+    case 'DEMANDE_NOM_MEDICAMENT':
+      await sendWhatsAppMessage(userId, "Quel médicament souhaitez-vous acheter ? Veuillez préciser le nom exact.");
+      userState.attenteMedicament = true;
+      userStates.set(userId, userState);
       break;
 
     case 'PHARMACIE_GARDE':
@@ -2078,139 +2180,147 @@ app.post('/api/webhook', async (req, res) => {
   // Répondre immédiatement
   res.status(200).send('EVENT_RECEIVED');
 
-  try {
-    const entry = req.body.entry?.[0];
-    const changes = entry?.changes?.[0];
-    const value = changes?.value;
-    const message = value?.messages?.[0];
+  // Traiter le message en arrière-plan
+  setImmediate(async () => {
+    try {
+      const entry = req.body.entry?.[0];
+      const changes = entry?.changes?.[0];
+      const value = changes?.value;
+      const message = value?.messages?.[0];
 
-    if (!message) {
-      console.log('📩 Message vide ou non texte');
-      return;
-    }
-
-    // Ignorer messages non supportés
-    if (message.type === 'unsupported' || message.type === 'system') {
-      console.log('📩 Message non supporté ignoré');
-      return;
-    }
-
-    const userId = message.from;
-    const messageType = message.type;
-
-    // Récupérer état utilisateur
-    let userState = userStates.get(userId);
-    if (!userState) {
-      userState = { ...DEFAULT_STATE };
-      userStates.set(userId, userState);
-    }
-
-    if (messageType === 'text') {
-      const text = message.text.body.trim();
-
-      console.log(`💬 ${userId}: "${text}"`);
-
-      // Vérifier doublons
-      if (isDuplicateMessage(userId, text)) {
-        console.log(`⚠️ Message dupliqué ignoré: "${text}"`);
+      if (!message) {
+        console.log('📩 Message vide ou non texte');
         return;
       }
 
-      // Traitement avec verrou
-      await withUserLock(userId, async () => {
-        // Gestion du panier
-        const resultatPanier = await gestionPanier.gererMessage(userId, text, userState);
-        if (resultatPanier !== null) {
+      // Marquer le message comme lu
+      if (message.id) {
+        await markMessageAsRead(message.id);
+      }
+
+      // Ignorer messages non supportés
+      if (message.type === 'unsupported' || message.type === 'system') {
+        console.log('📩 Message non supporté ignoré');
+        return;
+      }
+
+      const userId = message.from;
+      const messageType = message.type;
+
+      // Récupérer état utilisateur
+      let userState = userStates.get(userId);
+      if (!userState) {
+        userState = { ...DEFAULT_STATE };
+        userStates.set(userId, userState);
+      }
+
+      if (messageType === 'text') {
+        const text = message.text.body.trim();
+
+        console.log(`💬 ${userId}: "${text}"`);
+
+        // Vérifier doublons
+        if (isDuplicateMessage(userId, text)) {
+          console.log(`⚠️ Message dupliqué ignoré: "${text}"`);
           return;
         }
 
-        // Vérifier états spéciaux
-        if (userState.attenteMedicamentImage) {
-          await rechercherEtAfficherMedicament(userId, text);
-          userState.attenteMedicamentImage = false;
+        // Traitement avec verrou
+        await withUserLock(userId, async () => {
+          // Gestion du panier
+          const resultatPanier = await gestionPanier.gererMessage(userId, text, userState);
+          if (resultatPanier !== null) {
+            return;
+          }
+
+          // Vérifier états spéciaux
+          if (userState.attenteMedicamentImage) {
+            await rechercherEtAfficherMedicament(userId, text);
+            userState.attenteMedicamentImage = false;
+            userStates.set(userId, userState);
+            return;
+          }
+
+          if (userState.attenteMedicament) {
+            await rechercherEtAfficherMedicament(userId, text);
+            userState.attenteMedicament = false;
+            userStates.set(userId, userState);
+            return;
+          }
+
+          if (userState.attenteCommande && userState.listeMedicamentsAvecIndex) {
+            await traiterCommandeMedicament(userId, text, userState);
+            return;
+          }
+
+          if (userState.step === 'ATTENTE_INFOS_LIVRAISON') {
+            await traiterInfosLivraison(userId, text, userState);
+            return;
+          }
+
+          if (userState.step === 'ATTENTE_INFOS_LIVRAISON_MULTI') {
+            await traiterInfosLivraisonMulti(userId, text, userState);
+            return;
+          }
+
+          // États de rendez-vous
+          if (userState.attenteSpecialiteRdv ||
+              userState.attenteSelectionCliniqueRdv ||
+              userState.attenteDateRdv ||
+              userState.attenteHeureRdv ||
+              userState.attenteNomRdv ||
+              userState.attenteTelephoneRdv) {
+
+            await gererPriseRendezVous(userId, text);
+            return;
+          }
+
+          // Utiliser Groq comme cerveau principal
+          const result = await comprendreEtAgir(userId, text);
+
+          // Mettre à jour historique
+          if (!userState.historiqueMessages) {
+            userState.historiqueMessages = [];
+          }
+          userState.historiqueMessages.push({
+            message: text,
+            timestamp: new Date().toISOString()
+          });
+
+          // Limiter historique
+          if (userState.historiqueMessages.length > 20) {
+            userState.historiqueMessages = userState.historiqueMessages.slice(-20);
+          }
+
           userStates.set(userId, userState);
-          return;
-        }
-
-        if (userState.attenteMedicament) {
-          await rechercherEtAfficherMedicament(userId, text);
-          userState.attenteMedicament = false;
-          userStates.set(userId, userState);
-          return;
-        }
-
-        if (userState.attenteCommande && userState.listeMedicamentsAvecIndex) {
-          await traiterCommandeMedicament(userId, text, userState);
-          return;
-        }
-
-        if (userState.step === 'ATTENTE_INFOS_LIVRAISON') {
-          await traiterInfosLivraison(userId, text, userState);
-          return;
-        }
-
-        if (userState.step === 'ATTENTE_INFOS_LIVRAISON_MULTI') {
-          await traiterInfosLivraisonMulti(userId, text, userState);
-          return;
-        }
-
-        // États de rendez-vous
-        if (userState.attenteSpecialiteRdv ||
-            userState.attenteSelectionCliniqueRdv ||
-            userState.attenteDateRdv ||
-            userState.attenteHeureRdv ||
-            userState.attenteNomRdv ||
-            userState.attenteTelephoneRdv) {
-
-          await gererPriseRendezVous(userId, text);
-          return;
-        }
-
-        // Utiliser Groq comme cerveau principal
-        const result = await comprendreEtAgir(userId, text);
-
-        // Mettre à jour historique
-        if (!userState.historiqueMessages) {
-          userState.historiqueMessages = [];
-        }
-        userState.historiqueMessages.push({
-          message: text,
-          timestamp: new Date().toISOString()
         });
 
-        // Limiter historique
-        if (userState.historiqueMessages.length > 20) {
-          userState.historiqueMessages = userState.historiqueMessages.slice(-20);
+      } else if (messageType === 'image') {
+        const mediaId = message.image.id;
+
+        // Vérifier l'état de l'utilisateur
+        if (userState.step === 'ATTENTE_ORDONNANCE') {
+          // Ordonnance pour commande en cours
+          await traiterImageOrdonnance(userId, userState);
+
+        } else if (userState.step === 'ATTENTE_ORDONNANCE_MULTI') {
+          // Ordonnance pour commande multi-médicaments
+          await traiterImageOrdonnance(userId, userState);
+
+        } else if (userState.attentePhotoOrdonnance) {
+          // Ancien système
+          await traiterImageOrdonnance(userId, userState);
+
+        } else {
+          // Recherche de médicament par image
+          await traiterRechercheParImage(userId, mediaId, userState);
         }
-
-        userStates.set(userId, userState);
-      });
-
-    } else if (messageType === 'image') {
-      const mediaId = message.image.id;
-
-      // Vérifier l'état de l'utilisateur
-      if (userState.step === 'ATTENTE_ORDONNANCE') {
-        // Ordonnance pour commande en cours
-        await traiterImageOrdonnance(userId, userState);
-
-      } else if (userState.step === 'ATTENTE_ORDONNANCE_MULTI') {
-        // Ordonnance pour commande multi-médicaments
-        await traiterImageOrdonnance(userId, userState);
-
-      } else if (userState.attentePhotoOrdonnance) {
-        // Ancien système
-        await traiterImageOrdonnance(userId, userState);
-
-      } else {
-        // Recherche de médicament par image
-        await traiterRechercheParImage(userId, mediaId, userState);
       }
-    }
 
-  } catch (error) {
-    console.error('💥 ERREUR WEBHOOK:', error.message);
-  }
+    } catch (error) {
+      console.error('💥 ERREUR WEBHOOK:', error.message);
+    }
+  });
 });
 
 // =================== ENDPOINTS ADMIN ===================
