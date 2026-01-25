@@ -1943,10 +1943,10 @@ async function traiterImageOrdonnance(userId, userState) {
     "Pour finaliser :\n" +
     "Envoyez maintenant vos informations :\n\n" +
     "Format :\n" +
-    '"Nom: [Votre nom]\n' +
-    'Quartier: [Votre quartier à San Pedro]\n' +
-    'WhatsApp: [Votre numéro]\n' +
-    'Indications: [Repère pour livraison]"\n\n' +
+    '"Nom: [votre nom complet]\n' +
+    'Quartier: [votre quartier à San Pedro]\n' +
+    'WhatsApp: [votre numéro WhatsApp]\n' +
+    'Indications: [repère pour la livraison]"\n\n' +
     "Service uniquement à San Pedro"
   );
 
