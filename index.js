@@ -85,7 +85,7 @@ class GestionnaireContexte {
       urgent: ['urgent', 'vite', 'immédiat', 'dépêche', 'rapide', 'urgence'],
       stress: ['stress', 'nerveux', 'anxieux', 'inquiet', 'panique', 'angoissé'],
       douleurForte: ['atroce', 'insupportable', 'violent', 'fort', 'intense'],
-      satisfaction: ['merci', 'parfait', 'super', 'génial', 'content', 'satisfait']
+      satisfaction: ['merci', 'super', 'parfait', 'génial', 'content', 'satisfait', 'excellent']
     };
   }
   
@@ -682,6 +682,10 @@ const DEFAULT_STATE = {
   // Pour recherche par image
   attenteMedicamentImage: false,
   
+  // Pour avis
+  attenteAvis: false,
+  avisDemande: false,
+  
   // Contexte
   contexte: {
     historiqueConversation: [],
@@ -776,9 +780,55 @@ function getFraisLivraison() {
   return (heure >= 0 && heure < 8) ? CONFIG.LIVRAISON_NUIT : CONFIG.LIVRAISON_JOUR;
 }
 
+// Fonction pour normaliser les accents
+function normaliserTexte(texte) {
+  return texte
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase();
+}
+
 // =================== COMMUNICATION WHATSAPP ===================
+async function envoyerTypingIndicator(userId, isTyping = true) {
+  try {
+    await axios.post(
+      `https://graph.facebook.com/v19.0/${CONFIG.PHONE_NUMBER_ID}/messages`,
+      {
+        messaging_product: "whatsapp",
+        recipient_type: "individual",
+        to: userId,
+        type: "text",
+        text: { 
+          preview_url: false,
+          body: "" 
+        },
+        status: isTyping ? "mark_seen" : "delivered"
+      },
+      {
+        headers: { 
+          'Authorization': `Bearer ${CONFIG.WHATSAPP_TOKEN}`, 
+          'Content-Type': 'application/json' 
+        },
+        timeout: 5000
+      }
+    );
+  } catch (error) {
+    console.error('❌ Erreur typing indicator:', error.message);
+  }
+}
+
 async function sendWhatsAppMessage(to, text) {
   try {
+    // Activer "en train d'écrire" avant d'envoyer
+    await envoyerTypingIndicator(to, true);
+    
+    // Petite pause pour l'effet
+    await new Promise(resolve => setTimeout(resolve, 500));
+    
+    // Désactiver "en train d'écrire"
+    await envoyerTypingIndicator(to, false);
+    
+    // Envoyer le message réel
     const response = await axios.post(
       `https://graph.facebook.com/v19.0/${CONFIG.PHONE_NUMBER_ID}/messages`,
       {
@@ -786,7 +836,10 @@ async function sendWhatsAppMessage(to, text) {
         recipient_type: "individual",
         to: to,
         type: "text",
-        text: { body: text.substring(0, 4096) }
+        text: { 
+          preview_url: false,
+          body: text.substring(0, 4096) 
+        }
       },
       {
         headers: { 
@@ -796,7 +849,31 @@ async function sendWhatsAppMessage(to, text) {
         timeout: 10000
       }
     );
+    
+    // Marquer comme lu (double tick bleu) après 1 seconde
+    setTimeout(async () => {
+      try {
+        await axios.post(
+          `https://graph.facebook.com/v19.0/${CONFIG.PHONE_NUMBER_ID}/messages`,
+          {
+            messaging_product: "whatsapp",
+            status: "read",
+            message_id: response.data.messages?.[0]?.id
+          },
+          {
+            headers: { 
+              'Authorization': `Bearer ${CONFIG.WHATSAPP_TOKEN}`, 
+              'Content-Type': 'application/json' 
+            }
+          }
+        );
+      } catch (error) {
+        // Ignorer les erreurs de read status
+      }
+    }, 1000);
+    
     return response.data.messages?.[0]?.id;
+    
   } catch (error) {
     console.error('❌ Erreur envoi WhatsApp:', error.response?.data || error.message);
     return null;
@@ -811,57 +888,49 @@ async function comprendreEtAgir(userId, message) {
   const contexte = await gestionnaireContexte.mettreAJourContexte(userId, message, 'user');
   const resumeContexte = gestionnaireContexte.obtenirResumeContexte(userId);
   
+  // Détecter les remerciements
+  const texte = message.toLowerCase();
+  const userState = userStates.get(userId) || DEFAULT_STATE;
+  
+  // Si remerciement
+  if (texte.includes('merci') || texte.includes('super') || texte.includes('parfait')) {
+    await sendWhatsAppMessage(userId, "Avec plaisir ! 😊");
+    
+    // Demander un avis si pas déjà fait
+    if (!userState.avisDemande) {
+      setTimeout(async () => {
+        await envoyerDemandeAvis(userId);
+        userState.avisDemande = true;
+        userStates.set(userId, userState);
+      }, 2000);
+    }
+    
+    return { action: 'REMERCIEMENT', reponse: "Avec plaisir !" };
+  }
+  
   try {
     const prompt = `
-Tu es Mia, assistante médicale à San Pedro. Tu aides pour:
-1. Commandes de médicaments
-2. Pharmacies de garde
-3. Rendez-vous médicaux
-4. Conseils médicaux généraux
-5. Information sur les cliniques
+Tu es Mia, assistante médicale à San Pedro. Tu aides pour commandes médicaments, pharmacies de garde, rendez-vous médicaux.
 
-## CONTEXTE UTILISATEUR:
-${resumeContexte}
+## RÈGLES:
+- Réponds TRÈS BRIÈVEMENT (1 phrase max)
+- Pas de répétition de ce que l'utilisateur dit
+- Si demande claire, réponds simplement et passe à l'action
+- Pour salutations: réponds "Bonjour !"
+
+## EXEMPLES:
+"Paracétamol" → {"action":"RECHERCHE_MEDICAMENT","reponse":"","parametres":{"nom_medicament":"paracétamol"}}
+"Pharmacie de garde" → {"action":"PHARMACIE_GARDE","reponse":"","parametres":null}
+"Bonjour" → {"action":"SALUTATION","reponse":"Bonjour !","parametres":null}
+"Salut" → {"action":"SALUTATION","reponse":"Bonjour !","parametres":null}
 
 ## MESSAGE UTILISATEUR:
 "${message}"
 
-## RÈGLES STRICTES:
-- NE PAS inventer de données (médicaments, pharmacies, cliniques, prix)
-- Si tu ne sais pas, diriger vers le support
-- Pour les médicaments: demander le nom exact
-- Pour les pharmacies: consulter la base de données réelle
-- Pour les rendez-vous: extraire la spécialité
-- Pour les cliniques: consulter la base de données réelle
-- Pour conseils médicaux: donner des conseils généraux mais toujours recommander de consulter un médecin
-- NE JAMAIS diagnostiquer
-
-## ACTIONS DISPONIBLES:
-- RECHERCHE_MEDICAMENT → si demande de médicament spécifique
-- PHARMACIE_GARDE → si "pharmacie de garde" ou équivalent
-- DEMANDE_RENDEZ_VOUS → si "rendez-vous" ou recherche de spécialiste
-- LISTE_CLINIQUES → si demande de liste de cliniques
-- CONSEIL_MEDICAL → si demande de conseil médical général
-- SALUTATION → si simple salutation
-- SUPPORT → si problème technique ou besoin d'aide humaine
-
-## RÉPONSE:
-- Répondre naturellement comme une assistante
-- Si action directe, répondre brièvement et indiquer l'action
-- Toujours préciser que le service est uniquement à San Pedro
-
-## EXEMPLES:
-Utilisateur: "Paracétamol" → {"action":"RECHERCHE_MEDICAMENT","reponse":"Je cherche du paracétamol pour vous...","parametres":{"nom_medicament":"paracétamol"}}
-Utilisateur: "J'ai mal à la tête" → {"action":"CONSEIL_MEDICAL","reponse":"Pour les maux de tête, vous pouvez prendre du paracétamol. Mais si la douleur persiste, consultez un médecin.","parametres":null}
-Utilisateur: "Pharmacie ouverte" → {"action":"PHARMACIE_GARDE","reponse":"Je cherche les pharmacies de garde à San Pedro...","parametres":null}
-Utilisateur: "Je cherche un dermatologue" → {"action":"DEMANDE_RENDEZ_VOUS","reponse":"Je cherche des dermatologues à San Pedro...","parametres":{"specialite":"dermatologue"}}
-Utilisateur: "Quelles cliniques à San Pedro ?" → {"action":"LISTE_CLINIQUES","reponse":"Je recherche les cliniques disponibles à San Pedro...","parametres":null}
-Utilisateur: "Aide" → {"action":"SUPPORT","reponse":"Je peux vous aider pour: médicaments, pharmacies de garde, rendez-vous médicaux. Que souhaitez-vous faire ?","parametres":null}
-
 JSON uniquement:
 {
   "action": "ACTION",
-  "reponse": "réponse à montrer à l'utilisateur",
+  "reponse": "réponse très courte ou vide si action directe",
   "parametres": {"cle": "valeur"} ou null
 }
 `;
@@ -873,12 +942,12 @@ JSON uniquement:
         messages: [
           { 
             role: "system", 
-            content: "Tu es Mia, assistante médicale. Réponds UNIQUEMENT en JSON. Ne donne pas de données fictives." 
+            content: "Tu es Mia, assistante médicale. Réponds UNIQUEMENT en JSON. Sois bref." 
           },
           { role: "user", content: prompt }
         ],
-        temperature: 0.3,
-        max_tokens: 300,
+        temperature: 0.1,
+        max_tokens: 100,
         response_format: { type: "json_object" }
       },
       {
@@ -886,15 +955,17 @@ JSON uniquement:
           'Authorization': `Bearer ${CONFIG.GROQ_API_KEY}`,
           'Content-Type': 'application/json'
         },
-        timeout: 5000
+        timeout: 3000
       }
     );
 
     const result = JSON.parse(response.data.choices[0].message.content);
     console.log('✅ Résultat Groq:', JSON.stringify(result));
     
-    // Envoyer la réponse de Groq
-    await sendWhatsAppMessage(userId, result.reponse);
+    // Envoyer la réponse de Groq SEULEMENT si non vide
+    if (result.reponse && result.reponse.trim().length > 0) {
+      await sendWhatsAppMessage(userId, result.reponse);
+    }
     
     // Exécuter l'action correspondante
     await executerAction(userId, result, message);
@@ -903,10 +974,7 @@ JSON uniquement:
     
   } catch (error) {
     console.error('❌ Erreur Groq:', error.message);
-    await sendWhatsAppMessage(
-      userId,
-      "Désolé, une erreur technique est survenue. 📞 Contactez le support : " + CONFIG.SUPPORT_PHONE
-    );
+    // Pas de message d'erreur
   }
 }
 
@@ -920,9 +988,6 @@ async function executerAction(userId, result, messageOriginal) {
                            extraireNomMedicament(messageOriginal);
       if (nomMedicament) {
         await rechercherEtAfficherMedicament(userId, nomMedicament);
-      } else {
-        userState.attenteMedicament = true;
-        userStates.set(userId, userState);
       }
       break;
       
@@ -935,9 +1000,6 @@ async function executerAction(userId, result, messageOriginal) {
                         extraireSpecialite(messageOriginal);
       if (specialite) {
         await chercherCliniquesParSpecialitePourRdv(userId, specialite);
-      } else {
-        userState.attenteSpecialiteRdv = true;
-        userStates.set(userId, userState);
       }
       break;
       
@@ -945,20 +1007,16 @@ async function executerAction(userId, result, messageOriginal) {
       await afficherListeCliniquesReelles(userId);
       break;
       
-    case 'CONSEIL_MEDICAL':
-      // Groq a déjà donné la réponse, rien de plus à faire
-      break;
-      
     case 'SALUTATION':
       // Groq a déjà répondu
       break;
       
-    case 'SUPPORT':
-      // Groq a déjà donné des conseils
+    case 'REMERCIEMENT':
+      // Groq a déjà répondu "Avec plaisir !"
       break;
       
     default:
-      // Ne rien faire, Groq a déjà répondu
+      // Ne rien faire
       break;
   }
 }
@@ -971,7 +1029,7 @@ function extraireNomMedicament(message) {
     'aspirine', 'aspegic',
     'vitamine c', 'vitamine d', 'vitamine b',
     'sirop', 'sirop contre la toux', 'toux',
-    'doliprane', 'efferalgan'
+    'efferalgan'
   ];
   
   const texte = message.toLowerCase();
@@ -1035,10 +1093,27 @@ async function rechercherEtAfficherMedicament(userId, nomMedicament) {
       const medicament = { id: doc.id, ...doc.data() };
       const nomMed = (medicament.nom || '').toLowerCase();
       
-      if (nomMed.includes(termeRecherche) && medicament.pharmacieId) {
+      // Normaliser les deux textes pour ignorer les accents
+      const nomMedNormalise = normaliserTexte(nomMed);
+      const termeRechercheNormalise = normaliserTexte(termeRecherche);
+      
+      if (nomMedNormalise.includes(termeRechercheNormalise) && medicament.pharmacieId) {
         medicamentsFiltres.push(medicament);
       }
     });
+    
+    // Si non trouvé, chercher aussi par similarité
+    if (medicamentsFiltres.length === 0) {
+      snapshot.docs.forEach(doc => {
+        const medicament = { id: doc.id, ...doc.data() };
+        const nomMed = (medicament.nom || '').toLowerCase();
+        
+        // Chercher par début de mot
+        if (nomMed.startsWith(termeRecherche.substring(0, 3)) && medicament.pharmacieId) {
+          medicamentsFiltres.push(medicament);
+        }
+      });
+    }
     
     // Si non trouvé
     if (medicamentsFiltres.length === 0) {
@@ -1132,19 +1207,11 @@ async function rechercherEtAfficherMedicament(userId, nomMedicament) {
 async function traiterCommandeMedicament(userId, message, userState) {
   const texte = message.toLowerCase().trim();
   
-  // Commander avec numéro
-  const commandeRegex = /commander\s+(\d+)(?:\s+(\d+))?/i;
-  const match = texte.match(commandeRegex);
-  
   // Ajouter au panier
   const ajouterRegex = /ajouter\s+(\d+)(?:\s+(\d+))?/i;
   const matchAjouter = texte.match(ajouterRegex);
   
-  if (match) {
-    // Commande unique (ancien système)
-    await traiterCommandeUnique(userId, match, userState);
-    
-  } else if (matchAjouter) {
+  if (matchAjouter) {
     // Ajouter au panier
     const numero = parseInt(matchAjouter[1]);
     const quantite = matchAjouter[2] ? parseInt(matchAjouter[2]) : 1;
@@ -1649,18 +1716,10 @@ async function finaliserRendezVous(userId, telephone, userState) {
     // Message de confirmation
     await sendWhatsAppMessage(
       userId,
-      `Rendez-vous pris\n\n` +
-      `Patient : ${nomRdv}\n` +
-      `Téléphone : ${telephone}\n` +
-      `Clinique : ${cliniqueSelectionneeRdv.nom}\n` +
-      `Adresse : ${cliniqueSelectionneeRdv.adresse || 'San Pedro'}\n` +
-      `Spécialité : ${specialiteRdv}\n` +
-      `Date : ${dateRdv}\n` +
-      `Heure : ${heureRdv}\n` +
-      `Statut : En attente de confirmation\n\n` +
-      `La clinique vous contactera pour confirmation.\n\n` +
+      `✅ **RENDEZ-VOUS PRIS**\n\n` +
       `Référence : RDV-${rdvRef.id.substring(0, 8)}\n` +
-      `Support : ${CONFIG.SUPPORT_PHONE}`
+      `La clinique vous contactera pour confirmation.\n\n` +
+      `📞 Support : ${CONFIG.SUPPORT_PHONE}`
     );
     
     // Réinitialiser
@@ -1673,6 +1732,11 @@ async function finaliserRendezVous(userId, telephone, userState) {
     userState.nomRdv = null;
     userState.step = 'MENU_PRINCIPAL';
     userStates.set(userId, userState);
+    
+    // Demander avis après 3 secondes
+    setTimeout(() => {
+      envoyerDemandeAvis(userId);
+    }, 3000);
     
   } catch (error) {
     console.error('❌ Erreur rendez-vous:', error.message);
@@ -1794,6 +1858,62 @@ async function afficherListeCliniquesReelles(userId) {
   }
 }
 
+// =================== GESTION DES AVIS ===================
+async function envoyerDemandeAvis(userId) {
+  try {
+    // Attendre un peu avant de demander
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    
+    await sendWhatsAppMessage(
+      userId,
+      "⭐ **VOTRE AVIS NOUS INTÉRESSE** ⭐\n\n" +
+      "Comment s'est passée votre expérience avec Mia ?\n\n" +
+      "1️⃣ Excellent 😊\n" +
+      "2️⃣ Bien 👍\n" +
+      "3️⃣ Moyen 😕\n" +
+      "4️⃣ À améliorer 👎\n\n" +
+      "Répondez avec le chiffre (1, 2, 3 ou 4)"
+    );
+    
+    const userState = userStates.get(userId) || DEFAULT_STATE;
+    userState.attenteAvis = true;
+    userStates.set(userId, userState);
+    
+  } catch (error) {
+    console.error('❌ Erreur demande avis:', error.message);
+  }
+}
+
+async function traiterAvis(userId, message, userState) {
+  const texte = message.trim();
+  
+  if (texte === '1') {
+    await sendWhatsAppMessage(userId, "Merci pour votre excellent avis ! 😊");
+    await envoyerMerciFinal(userId);
+  } else if (texte === '2') {
+    await sendWhatsAppMessage(userId, "Merci pour votre avis positif ! 👍");
+    await envoyerMerciFinal(userId);
+  } else if (texte === '3') {
+    await sendWhatsAppMessage(userId, "Merci pour votre retour. Nous allons nous améliorer. 😊");
+    await envoyerMerciFinal(userId);
+  } else if (texte === '4') {
+    await sendWhatsAppMessage(userId, "Désolé pour cette expérience. Nous allons nous améliorer. Merci pour votre retour.");
+    await envoyerMerciFinal(userId);
+  } else {
+    await sendWhatsAppMessage(userId, "Merci pour votre retour ! 😊");
+  }
+  
+  userState.attenteAvis = false;
+  userState.avisDemande = true;
+  userStates.set(userId, userState);
+}
+
+async function envoyerMerciFinal(userId) {
+  setTimeout(async () => {
+    await sendWhatsAppMessage(userId, "N'hésitez pas si vous avez besoin d'autre chose ! 📞 " + CONFIG.SUPPORT_PHONE);
+  }, 1000);
+}
+
 // =================== RECHERCHE PAR IMAGE ===================
 async function traiterRechercheParImage(userId, mediaId, userState) {
   try {
@@ -1909,7 +2029,7 @@ async function traiterInfosLivraison(userId, message, userState) {
   
   await sendWhatsAppMessage(
     userId,
-    `Commande confirmée #${numeroCommande}\n\n` +
+    `✅ **COMMANDE CONFIRMÉE #${numeroCommande}**\n\n` +
     `Client : ${infos.nom}\n` +
     `WhatsApp : ${infos.whatsapp}\n` +
     `Quartier : ${infos.quartier}\n` +
@@ -1920,12 +2040,8 @@ async function traiterInfosLivraison(userId, message, userState) {
     `Total médicaments : ${commande.prixTotal} FCFA\n` +
     `Livraison : ${commande.fraisLivraison} FCFA\n` +
     `TOTAL À PAYER : ${commande.total} FCFA\n\n` +
-    `Prochaines étapes :\n` +
-    `1. Validation par la pharmacie\n` +
-    `2. Appel de confirmation\n` +
-    `3. Livraison à domicile\n\n` +
-    `Support & suivi :\n` +
-    `${CONFIG.SUPPORT_PHONE}\n` +
+    `📦 **Livraison en cours...**\n\n` +
+    `Support : ${CONFIG.SUPPORT_PHONE}\n` +
     `Référence : ${numeroCommande}`
   );
   
@@ -1935,6 +2051,11 @@ async function traiterInfosLivraison(userId, message, userState) {
   userState.listeMedicamentsAvecIndex = [];
   userState.step = 'MENU_PRINCIPAL';
   userStates.set(userId, userState);
+  
+  // Demander avis après 5 secondes
+  setTimeout(() => {
+    envoyerDemandeAvis(userId);
+  }, 5000);
 }
 
 async function traiterInfosLivraisonMulti(userId, message, userState) {
@@ -2005,7 +2126,7 @@ async function traiterInfosLivraisonMulti(userId, message, userState) {
   const panier = commande.panier || [];
   const numeroCommande = `CMD${Date.now().toString().slice(-6)}`;
   
-  let messageConfirmation = `Commande confirmée #${numeroCommande}\n\n`;
+  let messageConfirmation = `✅ **COMMANDE CONFIRMÉE #${numeroCommande}**\n\n`;
   messageConfirmation += `Client : ${infos.nom}\n`;
   messageConfirmation += `WhatsApp : ${infos.whatsapp}\n`;
   messageConfirmation += `Quartier : ${infos.quartier}\n`;
@@ -2023,13 +2144,9 @@ async function traiterInfosLivraisonMulti(userId, message, userState) {
   messageConfirmation += `Livraison : ${commande.fraisLivraison} FCFA\n`;
   messageConfirmation += `TOTAL À PAYER : ${commande.total} FCFA\n\n`;
   
-  messageConfirmation += `Prochaines étapes :\n`;
-  messageConfirmation += `1. Validation par les pharmacies\n`;
-  messageConfirmation += `2. Appel de confirmation\n`;
-  messageConfirmation += `3. Livraison à domicile\n\n`;
+  messageConfirmation += `📦 **Livraison en cours...**\n\n`;
   
-  messageConfirmation += `Support & suivi :\n`;
-  messageConfirmation += `${CONFIG.SUPPORT_PHONE}\n`;
+  messageConfirmation += `Support : ${CONFIG.SUPPORT_PHONE}\n`;
   messageConfirmation += `Référence : ${numeroCommande}`;
   
   await sendWhatsAppMessage(userId, messageConfirmation);
@@ -2041,6 +2158,11 @@ async function traiterInfosLivraisonMulti(userId, message, userState) {
   userState.listeMedicamentsAvecIndex = [];
   userState.step = 'MENU_PRINCIPAL';
   userStates.set(userId, userState);
+  
+  // Demander avis après 5 secondes
+  setTimeout(() => {
+    envoyerDemandeAvis(userId);
+  }, 5000);
 }
 
 // =================== WEBHOOK WHATSAPP ===================
@@ -2104,6 +2226,14 @@ app.post('/api/webhook', async (req, res) => {
       
       // Traitement avec verrou
       await withUserLock(userId, async () => {
+        const userState = userStates.get(userId) || { ...DEFAULT_STATE };
+        
+        // Vérifier si attente d'avis
+        if (userState.attenteAvis) {
+          await traiterAvis(userId, text, userState);
+          return;
+        }
+        
         // Gestion du panier
         const resultatPanier = await gestionPanier.gererMessage(userId, text, userState);
         if (resultatPanier !== null) {
@@ -2153,7 +2283,7 @@ app.post('/api/webhook', async (req, res) => {
         }
         
         // Utiliser Groq comme cerveau principal
-        const result = await comprendreEtAgir(userId, text);
+        await comprendreEtAgir(userId, text);
         
         // Mettre à jour historique
         if (!userState.historiqueMessages) {
@@ -2301,6 +2431,8 @@ app.listen(PORT, HOST, () => {
 ✅ Gestion intelligente du contexte
 ✅ Achats multi-médicaments
 ✅ Compréhension des références
+✅ Demande d'avis automatique
+✅ Indicateurs WhatsApp actifs
 =======================================================
   `);
 });
