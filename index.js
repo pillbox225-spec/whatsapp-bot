@@ -1,4 +1,3 @@
-// =================== CONFIGURATION INITIALE ===================
 require('dotenv').config();
 const express = require('express');
 const axios = require('axios');
@@ -41,10 +40,10 @@ let FieldValue;
       status: 'connected'
     });
     console.log('✅ Connexion Firestore établie');
-    
+
     // Vérification des données initiales
     await verifierDonneesInitiales();
-    
+
   } catch (error) {
     console.error('❌ ERREUR CRITIQUE Firebase:', error.message);
     process.exit(1);
@@ -80,7 +79,7 @@ class GestionnaireContexte {
       mauxTete: ['mal de tête', 'céphalée', 'migraine', 'céphalalgie'],
       allergie: ['allergie', 'allergique', 'réaction', 'urticaire']
     };
-    
+
     this.motsClesEmotionnels = {
       urgent: ['urgent', 'vite', 'immédiat', 'dépêche', 'rapide', 'urgence'],
       stress: ['stress', 'nerveux', 'anxieux', 'inquiet', 'panique', 'angoissé'],
@@ -88,43 +87,43 @@ class GestionnaireContexte {
       satisfaction: ['merci', 'parfait', 'super', 'génial', 'content', 'satisfait']
     };
   }
-  
+
   async mettreAJourContexte(userId, message, role = 'user') {
     const userState = userStates.get(userId) || { ...DEFAULT_STATE };
-    
+
     if (!userState.contexte) {
       userState.contexte = JSON.parse(JSON.stringify(DEFAULT_STATE.contexte));
     }
-    
+
     // 1. Ajouter à l'historique
     userState.contexte.historiqueConversation.push({
       role,
       message,
       timestamp: new Date().toISOString()
     });
-    
+
     // Limiter l'historique
     if (userState.contexte.historiqueConversation.length > 50) {
-      userState.contexte.historiqueConversation = 
+      userState.contexte.historiqueConversation =
         userState.contexte.historiqueConversation.slice(-50);
     }
-    
+
     // 2. Analyser le message
     if (role === 'user') {
       await this.analyserMessageUtilisateur(userId, message, userState);
     }
-    
+
     // 3. Mettre à jour les références
     this.mettreAJourReferences(userId, message, userState);
-    
+
     userStates.set(userId, userState);
-    
+
     return userState.contexte;
   }
-  
+
   async analyserMessageUtilisateur(userId, message, userState) {
     const texte = message.toLowerCase();
-    
+
     // Détecter symptômes
     const symptomesDetectes = this.detecterSymptomes(texte);
     if (symptomesDetectes.length > 0) {
@@ -134,23 +133,23 @@ class GestionnaireContexte {
         }
       });
     }
-    
+
     // Analyser émotion
     this.analyserEtatEmotionnel(userId, texte, userState);
-    
+
     // Détecter références
     this.detecterReferencesImplicites(userId, texte, userState);
-    
+
     // Extraire infos profil
     this.extraireInformationsProfil(texte, userState);
-    
+
     // Enregistrer médicaments
     this.enregistrerMedicamentsMentionnes(texte, userState);
   }
-  
+
   detecterSymptomes(texte) {
     const symptomes = [];
-    
+
     for (const [symptome, motsCles] of Object.entries(this.motsClesSymptomes)) {
       for (const motCle of motsCles) {
         if (texte.includes(motCle)) {
@@ -159,16 +158,16 @@ class GestionnaireContexte {
         }
       }
     }
-    
+
     return [...new Set(symptomes)];
   }
-  
+
   analyserEtatEmotionnel(userId, texte, userState) {
     let urgence = 0;
     let stress = 0;
     let douleurForte = 0;
     let satisfaction = 0;
-    
+
     // Mots-clés émotionnels
     for (const [emotion, mots] of Object.entries(this.motsClesEmotionnels)) {
       for (const mot of mots) {
@@ -192,58 +191,58 @@ class GestionnaireContexte {
         }
       }
     }
-    
+
     // Ponctuation
     const pointsExclamation = (texte.match(/!/g) || []).length;
     const pointsInterrogation = (texte.match(/\?/g) || []).length;
     const majuscules = (texte.match(/[A-Z]/g) || []).length;
-    
+
     urgence += pointsExclamation * 0.5;
     stress += pointsInterrogation * 0.3;
-    
+
     if (majuscules > texte.length * 0.2) {
       urgence += 1;
       stress += 1;
     }
-    
+
     // Mettre à jour
-    userState.contexte.emotionnel.urgenceNiveau = 
+    userState.contexte.emotionnel.urgenceNiveau =
       Math.min(10, Math.max(0, urgence));
-    userState.contexte.emotionnel.frustrationNiveau = 
+    userState.contexte.emotionnel.frustrationNiveau =
       Math.min(10, Math.max(0, stress));
-    
+
     // Ton général
     if (satisfaction > 2) userState.contexte.emotionnel.ton = 'satisfait';
     else if (urgence > 3) userState.contexte.emotionnel.ton = 'pressé';
     else if (stress > 3) userState.contexte.emotionnel.ton = 'stressé';
     else if (douleurForte > 2) userState.contexte.emotionnel.ton = 'douloureux';
     else userState.contexte.emotionnel.ton = 'neutre';
-    
+
     userState.contexte.emotionnel.derniereInteractionPositive = satisfaction > 1;
   }
-  
+
   detecterReferencesImplicites(userId, texte, userState) {
     const references = userState.contexte.references;
-    
+
     // Pronoms de référence
     const pronoms = ['celui', 'celle', 'ceux', 'celles', 'ce', 'cet', 'cette'];
     const mots = texte.split(/\s+/);
-    
+
     for (const mot of mots) {
       if (pronoms.includes(mot.toLowerCase())) {
         references.dernierPronom = mot.toLowerCase();
         break;
       }
     }
-    
+
     // Références contextuelles
-    if (texte.includes("que tu as dit") || 
-        texte.includes("dont tu parlais") || 
+    if (texte.includes("que tu as dit") ||
+        texte.includes("dont tu parlais") ||
         texte.includes("mentionné") ||
         texte.includes("précédent")) {
       references.derniereEntite = references.derniereEntite;
     }
-    
+
     // Sauvegarder contexte
     if (userState.contexte.historiqueConversation.length > 1) {
       const derniersMessages = userState.contexte.historiqueConversation
@@ -253,27 +252,27 @@ class GestionnaireContexte {
       references.contextePrecedent = derniersMessages;
     }
   }
-  
+
   extraireInformationsProfil(texte, userState) {
     // Âge
     const ageMatch = texte.match(/(\d+)\s*(ans?|âge)/i);
     if (ageMatch) {
       userState.contexte.profil.age = parseInt(ageMatch[1]);
     }
-    
+
     // Sexe
     if (texte.includes('je suis un homme') || texte.includes('monsieur')) {
       userState.contexte.profil.sexe = 'M';
     } else if (texte.includes('je suis une femme') || texte.includes('madame')) {
       userState.contexte.profil.sexe = 'F';
     }
-    
+
     // Allergies
     const allergieMatch = texte.match(/allerg(?:ie|ique)\s+(?:à|au)\s+([^\.\?]+)/i);
     if (allergieMatch) {
       userState.contexte.profil.preferences.allergies.push(allergieMatch[1].trim());
     }
-    
+
     // Conditions chroniques
     const conditions = ['diabète', 'hypertension', 'asthme', 'cardiaque', 'épilepsie'];
     conditions.forEach(condition => {
@@ -282,13 +281,13 @@ class GestionnaireContexte {
       }
     });
   }
-  
+
   enregistrerMedicamentsMentionnes(texte, userState) {
     const medicamentsConnus = [
       'paracétamol', 'doliprane', 'ibuprofène', 'advil', 'amoxicilline',
       'vitamine c', 'aspirine', 'ventoline', 'insuline', 'sirop'
     ];
-    
+
     medicamentsConnus.forEach(medicament => {
       if (texte.includes(medicament)) {
         if (!userState.contexte.medical.medicamentsRecherches.includes(medicament)) {
@@ -298,10 +297,10 @@ class GestionnaireContexte {
       }
     });
   }
-  
+
   mettreAJourReferences(userId, message, userState) {
     const references = userState.contexte.references;
-    
+
     // Dernière entité
     const entites = ['médicament', 'pharmacie', 'clinique', 'médecin', 'symptôme'];
     entites.forEach(entite => {
@@ -309,7 +308,7 @@ class GestionnaireContexte {
         references.derniereEntite = entite;
       }
     });
-    
+
     // Dernière action
     const actions = ['commander', 'acheter', 'rechercher', 'trouver', 'prendre rdv'];
     actions.forEach(action => {
@@ -318,14 +317,14 @@ class GestionnaireContexte {
       }
     });
   }
-  
+
   obtenirResumeContexte(userId) {
     const userState = userStates.get(userId);
     if (!userState?.contexte) return '';
-    
+
     const ctx = userState.contexte;
     let resume = '';
-    
+
     // Profil
     if (ctx.profil.nom || ctx.profil.age) {
       resume += `**Profil:** `;
@@ -335,29 +334,29 @@ class GestionnaireContexte {
       if (ctx.profil.quartier) resume += `Quartier: ${ctx.profil.quartier}`;
       resume += `\n`;
     }
-    
+
     // Symptômes
     if (ctx.medical.symptomesActuels.length > 0) {
       resume += `**Symptômes:** ${ctx.medical.symptomesActuels.join(', ')}\n`;
     }
-    
+
     // Médicaments
     if (ctx.medical.medicamentsRecherches.length > 0) {
       resume += `**Médicaments:** ${ctx.medical.medicamentsRecherches.join(', ')}\n`;
     }
-    
+
     // Émotion
     if (ctx.emotionnel.ton !== 'neutre') {
       resume += `**État:** ${ctx.emotionnel.ton} `;
       if (ctx.emotionnel.urgenceNiveau > 5) resume += `(urgence)`;
       resume += `\n`;
     }
-    
+
     // Dernier médicament
     if (ctx.medical.dernierMedicamentMentionne) {
       resume += `**Dernier médicament:** ${ctx.medical.dernierMedicamentMentionne}\n`;
     }
-    
+
     // Contexte récent
     if (ctx.historiqueConversation.length > 1) {
       const derniersMessages = ctx.historiqueConversation
@@ -366,30 +365,30 @@ class GestionnaireContexte {
         .join(' | ');
       resume += `**Contexte:** ${derniersMessages}\n`;
     }
-    
+
     return resume;
   }
-  
+
   interpreterReference(userId, reference) {
     const userState = userStates.get(userId);
     if (!userState?.contexte) return null;
-    
+
     const ctx = userState.contexte;
-    
+
     if (reference.includes("celui") || reference.includes("ce médicament")) {
       return ctx.medical.dernierMedicamentMentionne;
     }
-    
+
     if (reference.includes("ce symptôme") || reference.includes("cette douleur")) {
       return ctx.medical.symptomesActuels[ctx.medical.symptomesActuels.length - 1];
     }
-    
+
     if (reference.includes("cette pharmacie")) {
       return ctx.transactionnel.pharmaciesConsultees[
         ctx.transactionnel.pharmaciesConsultees.length - 1
       ];
     }
-    
+
     return null;
   }
 }
@@ -408,22 +407,22 @@ class GestionPanier {
       FINALISATION: 'finalisation'
     };
   }
-  
+
   async gererMessage(userId, message, userState) {
     const texte = message.toLowerCase().trim();
-    
+
     // Initialiser le panier si besoin
     if (!userState.panier) {
       userState.panier = [];
       userStates.set(userId, userState);
     }
-    
+
     // 1. Si l'utilisateur dit qu'il veut plusieurs médicaments
-    if (texte.includes('plusieurs') || texte.includes('multi') || 
+    if (texte.includes('plusieurs') || texte.includes('multi') ||
         texte.includes('différents') || texte.includes('plus d\'un')) {
       return this.demarrerModeMulti(userId, userState);
     }
-    
+
     // 2. Si l'utilisateur dit "continuer" après un ajout
     if (texte === 'continuer' || texte === 'oui' || texte === 'encore') {
       if (userState.panier.length > 0) {
@@ -432,7 +431,7 @@ class GestionPanier {
         return this.demanderPremierMedicament(userId, userState);
       }
     }
-    
+
     // 3. Si l'utilisateur dit "terminer" ou "fini"
     if (texte === 'terminer' || texte === 'fini' || texte === 'finaliser') {
       if (userState.panier.length > 0) {
@@ -442,56 +441,56 @@ class GestionPanier {
         return;
       }
     }
-    
+
     // 4. Si l'utilisateur veut voir son panier
     if (texte === 'panier' || texte === 'voir panier' || texte === 'mon panier') {
       return this.afficherPanier(userId, userState);
     }
-    
+
     // 5. Si l'utilisateur veut vider son panier
     if (texte === 'vider' || texte === 'vider panier' || texte === 'recommencer') {
       return this.viderPanier(userId, userState);
     }
-    
+
     return null;
   }
-  
+
   async demarrerModeMulti(userId, userState) {
     userState.modeMulti = true;
     userStates.set(userId, userState);
-    
+
     await sendWhatsAppMessage(userId, "Mode multi-médicaments activé. Dites-moi le premier médicament.");
-    
+
     userState.attenteMedicament = true;
     userStates.set(userId, userState);
   }
-  
+
   async demanderPremierMedicament(userId, userState) {
     await sendWhatsAppMessage(userId, "Dites-moi le nom du médicament que vous souhaitez.");
-    
+
     userState.attenteMedicament = true;
     userStates.set(userId, userState);
   }
-  
+
   async demanderAutreMedicament(userId, userState) {
     await sendWhatsAppMessage(userId, "Dites-moi le nom du prochain médicament.");
-    
+
     userState.attenteMedicament = true;
     userStates.set(userId, userState);
   }
-  
+
   async ajouterAuPanier(userId, medicamentInfo, quantite = 1) {
     const userState = userStates.get(userId) || { ...DEFAULT_STATE };
-    
+
     if (!userState.panier) {
       userState.panier = [];
     }
-    
+
     // Vérifier si déjà dans le panier
     const indexExistant = userState.panier.findIndex(
       item => item.medicamentId === medicamentInfo.medicamentId
     );
-    
+
     if (indexExistant >= 0) {
       userState.panier[indexExistant].quantite += quantite;
     } else {
@@ -507,17 +506,17 @@ class GestionPanier {
         forme: medicamentInfo.medicament.forme
       });
     }
-    
+
     userState.dernierMedicamentAjoute = medicamentInfo;
     userStates.set(userId, userState);
-    
+
     // Demander si continuer ou terminer
     await this.demanderContinuation(userId, userState);
   }
-  
+
   async demanderContinuation(userId, userState) {
     const panier = userState.panier || [];
-    
+
     await sendWhatsAppMessage(
       userId,
       `Ajouté au panier.\n\n` +
@@ -530,17 +529,17 @@ class GestionPanier {
       `"vider" pour vider et recommencer`
     );
   }
-  
+
   async afficherPanier(userId, userState) {
     const panier = userState.panier || [];
-    
+
     if (panier.length === 0) {
       await sendWhatsAppMessage(userId, "Votre panier est vide.");
       return;
     }
-    
+
     const { sousTotal, fraisLivraison, total } = this.calculerTotal(panier);
-    
+
     await sendWhatsAppMessage(
       userId,
       `Votre panier (${panier.length} médicament(s))\n\n` +
@@ -553,37 +552,37 @@ class GestionPanier {
       `"vider" pour vider le panier`
     );
   }
-  
+
   async viderPanier(userId, userState) {
     userState.panier = [];
     userStates.set(userId, userState);
-    
+
     await sendWhatsAppMessage(userId, "Panier vidé. Dites-moi un médicament pour commencer.");
-    
+
     userState.attenteMedicament = true;
     userStates.set(userId, userState);
   }
-  
+
   async finaliserPanier(userId, userState) {
     const panier = userState.panier || [];
-    
+
     if (panier.length === 0) {
       await sendWhatsAppMessage(userId, "Votre panier est vide.");
       return;
     }
-    
+
     const { sousTotal, fraisLivraison, total } = this.calculerTotal(panier);
-    
+
     // Vérifier si ordonnance requise
     const ordonnanceRequise = panier.some(item => item.necessiteOrdonnance);
-    
+
     await sendWhatsAppMessage(
       userId,
       `Panier finalisé\n\n` +
       `Votre commande (${panier.length} médicament(s)) :\n\n` +
       this.formaterPanier(panier) + `\n` +
       `TOTAL : ${total} FCFA\n\n` +
-      (ordonnanceRequise ? 
+      (ordonnanceRequise ?
         `Ordonnance requise. Envoyez la photo de votre ordonnance.` :
         `Pour finaliser, envoyez :\n` +
         `"Nom: [Votre nom]\n` +
@@ -591,7 +590,7 @@ class GestionPanier {
         `WhatsApp: [Votre numéro]\n` +
         `Indications: [Repère pour livraison]"`)
     );
-    
+
     // Sauvegarder la commande
     userState.commandeEnCours = {
       panier: panier,
@@ -600,11 +599,11 @@ class GestionPanier {
       total: total,
       ordonnanceRequise: ordonnanceRequise
     };
-    
+
     userState.step = ordonnanceRequise ? 'ATTENTE_ORDONNANCE_MULTI' : 'ATTENTE_INFOS_LIVRAISON_MULTI';
     userStates.set(userId, userState);
   }
-  
+
   formaterPanier(panier) {
     let message = '';
     panier.forEach((item, index) => {
@@ -615,15 +614,15 @@ class GestionPanier {
     });
     return message;
   }
-  
+
   calculerTotal(panier) {
     const sousTotal = panier.reduce((total, item) => {
       return total + (item.prixUnitaire * item.quantite);
     }, 0);
-    
+
     const fraisLivraison = getFraisLivraison();
     const total = sousTotal + fraisLivraison;
-    
+
     return { sousTotal, fraisLivraison, total };
   }
 }
@@ -664,7 +663,7 @@ const DEFAULT_STATE = {
   historiqueMessages: [],
   modeMulti: false,
   dernierMedicamentAjoute: null,
-  
+
   // Pour rendez-vous
   attenteSpecialiteRdv: false,
   attenteSelectionCliniqueRdv: false,
@@ -678,10 +677,10 @@ const DEFAULT_STATE = {
   dateRdv: null,
   heureRdv: null,
   nomRdv: null,
-  
+
   // Pour recherche par image
   attenteMedicamentImage: false,
-  
+
   // Contexte
   contexte: {
     historiqueConversation: [],
@@ -737,20 +736,20 @@ function isDuplicateMessage(userId, message) {
   const cacheKey = `${userId}_${message}`;
   const now = Date.now();
   const cached = messageCache.get(cacheKey);
-  
+
   if (cached && (now - cached.timestamp < CACHE_DURATION)) {
     return true;
   }
-  
+
   messageCache.set(cacheKey, { timestamp: now, message });
-  
+
   // Nettoyer le cache
   for (const [key, value] of messageCache.entries()) {
     if (now - value.timestamp > CACHE_DURATION) {
       messageCache.delete(key);
     }
   }
-  
+
   return false;
 }
 
@@ -759,7 +758,7 @@ async function withUserLock(userId, callback) {
     console.log(`⏳ ${userId} est déjà en traitement`);
     return null;
   }
-  
+
   processingLocks.set(userId, true);
   try {
     return await callback();
@@ -789,9 +788,9 @@ async function sendWhatsAppMessage(to, text) {
         text: { body: text.substring(0, 4096) }
       },
       {
-        headers: { 
-          'Authorization': `Bearer ${CONFIG.WHATSAPP_TOKEN}`, 
-          'Content-Type': 'application/json' 
+        headers: {
+          'Authorization': `Bearer ${CONFIG.WHATSAPP_TOKEN}`,
+          'Content-Type': 'application/json'
         },
         timeout: 10000
       }
@@ -806,11 +805,11 @@ async function sendWhatsAppMessage(to, text) {
 // =================== CERVEAU PRINCIPAL - GROQ ===================
 async function comprendreEtAgir(userId, message) {
   console.log(`🧠 Analyse: "${message}"`);
-  
+
   // Mettre à jour le contexte
   const contexte = await gestionnaireContexte.mettreAJourContexte(userId, message, 'user');
   const resumeContexte = gestionnaireContexte.obtenirResumeContexte(userId);
-  
+
   try {
     const prompt = `
 Tu es Mia, assistante médicale à San Pedro. Tu aides pour:
@@ -871,9 +870,9 @@ JSON uniquement:
       {
         model: CONFIG.GROQ_MODEL,
         messages: [
-          { 
-            role: "system", 
-            content: "Tu es Mia, assistante médicale. Réponds UNIQUEMENT en JSON. Ne donne pas de données fictives." 
+          {
+            role: "system",
+            content: "Tu es Mia, assistante médicale. Réponds UNIQUEMENT en JSON. Ne donne pas de données fictives."
           },
           { role: "user", content: prompt }
         ],
@@ -892,15 +891,15 @@ JSON uniquement:
 
     const result = JSON.parse(response.data.choices[0].message.content);
     console.log('✅ Résultat Groq:', JSON.stringify(result));
-    
+
     // Envoyer la réponse de Groq
     await sendWhatsAppMessage(userId, result.reponse);
-    
+
     // Exécuter l'action correspondante
     await executerAction(userId, result, message);
-    
+
     return result;
-    
+
   } catch (error) {
     console.error('❌ Erreur Groq:', error.message);
     await sendWhatsAppMessage(
@@ -913,10 +912,10 @@ JSON uniquement:
 // =================== EXÉCUTION DES ACTIONS ===================
 async function executerAction(userId, result, messageOriginal) {
   const userState = userStates.get(userId) || { ...DEFAULT_STATE };
-  
+
   switch(result.action) {
     case 'RECHERCHE_MEDICAMENT':
-      const nomMedicament = result.parametres?.nom_medicament || 
+      const nomMedicament = result.parametres?.nom_medicament ||
                            extraireNomMedicament(messageOriginal);
       if (nomMedicament) {
         await rechercherEtAfficherMedicament(userId, nomMedicament);
@@ -925,13 +924,13 @@ async function executerAction(userId, result, messageOriginal) {
         userStates.set(userId, userState);
       }
       break;
-      
+
     case 'PHARMACIE_GARDE':
       await afficherPharmaciesDeGarde(userId);
       break;
-      
+
     case 'DEMANDE_RENDEZ_VOUS':
-      const specialite = result.parametres?.specialite || 
+      const specialite = result.parametres?.specialite ||
                         extraireSpecialite(messageOriginal);
       if (specialite) {
         await chercherCliniquesParSpecialitePourRdv(userId, specialite);
@@ -940,23 +939,23 @@ async function executerAction(userId, result, messageOriginal) {
         userStates.set(userId, userState);
       }
       break;
-      
+
     case 'LISTE_CLINIQUES':
       await afficherListeCliniquesReelles(userId);
       break;
-      
+
     case 'CONSEIL_MEDICAL':
       // Groq a déjà donné la réponse, rien de plus à faire
       break;
-      
+
     case 'SALUTATION':
       // Groq a déjà répondu
       break;
-      
+
     case 'SUPPORT':
       // Groq a déjà donné des conseils
       break;
-      
+
     default:
       // Ne rien faire, Groq a déjà répondu
       break;
@@ -973,15 +972,15 @@ function extraireNomMedicament(message) {
     'sirop', 'sirop contre la toux', 'toux',
     'doliprane', 'efferalgan'
   ];
-  
+
   const texte = message.toLowerCase();
-  
+
   for (const medicament of medicamentsCourants) {
     if (texte.includes(medicament)) {
       return medicament;
     }
   }
-  
+
   return null;
 }
 
@@ -999,15 +998,15 @@ function extraireSpecialite(message) {
     'chirurgien', 'chirurgie',
     'urgences', 'urgence'
   ];
-  
+
   const texte = message.toLowerCase();
-  
+
   for (const specialite of specialites) {
     if (texte.includes(specialite)) {
       return specialite;
     }
   }
-  
+
   return null;
 }
 
@@ -1015,31 +1014,31 @@ function extraireSpecialite(message) {
 async function rechercherEtAfficherMedicament(userId, nomMedicament) {
   try {
     await sendWhatsAppMessage(userId, `Recherche "${nomMedicament}"...`);
-    
+
     const termeRecherche = nomMedicament.toLowerCase().trim();
-    
+
     if (termeRecherche.length < 3) {
       await sendWhatsAppMessage(userId, "Nom trop court (min 3 lettres).");
       return;
     }
-    
+
     // Recherche
     const snapshot = await db.collection('medicaments')
       .where('stock', '>', 0)
       .limit(10)
       .get();
-    
+
     const medicamentsFiltres = [];
-    
+
     snapshot.docs.forEach(doc => {
       const medicament = { id: doc.id, ...doc.data() };
       const nomMed = (medicament.nom || '').toLowerCase();
-      
+
       if (nomMed.includes(termeRecherche) && medicament.pharmacieId) {
         medicamentsFiltres.push(medicament);
       }
     });
-    
+
     // Si non trouvé
     if (medicamentsFiltres.length === 0) {
       await sendWhatsAppMessage(
@@ -1050,11 +1049,11 @@ async function rechercherEtAfficherMedicament(userId, nomMedicament) {
       );
       return;
     }
-    
+
     // Récupérer pharmacies
     const pharmacieIds = [...new Set(medicamentsFiltres.map(m => m.pharmacieId))];
     const pharmaciesMap = new Map();
-    
+
     for (const pharmacieId of pharmacieIds) {
       try {
         const pharmacieDoc = await db.collection('pharmacies').doc(pharmacieId).get();
@@ -1065,17 +1064,17 @@ async function rechercherEtAfficherMedicament(userId, nomMedicament) {
         console.error(`Erreur pharmacie ${pharmacieId}:`, error.message);
       }
     }
-    
+
     // Construire réponse
     const userState = userStates.get(userId) || DEFAULT_STATE;
     const listeMedicamentsAvecIndex = [];
-    
+
     let message = `${nomMedicament.toUpperCase()}\n\n`;
-    
+
     medicamentsFiltres.forEach((medicament, index) => {
       const pharmacie = pharmaciesMap.get(medicament.pharmacieId);
       if (!pharmacie) return;
-      
+
       const numero = index + 1;
       listeMedicamentsAvecIndex.push({
         index: numero,
@@ -1084,22 +1083,22 @@ async function rechercherEtAfficherMedicament(userId, nomMedicament) {
         pharmacieNom: pharmacie.nom,
         medicament: medicament
       });
-      
+
       message += `${numero}. ${medicament.nom}\n`;
       message += `   ${medicament.prix || '?'} FCFA\n`;
       message += `   ${pharmacie.nom}\n`;
       message += `   ${medicament.stock || 0} disponible(s)\n`;
-      
+
       if (medicament.dosage || medicament.forme) {
         message += `   ${medicament.dosage || ''} ${medicament.forme || ''}\n`;
       }
-      
+
       message += `${medicament.necessiteOrdonnance ? 'Ordonnance requise' : 'Sans ordonnance'}\n\n`;
     });
-    
+
     message += `Pour ajouter au panier :\n`;
     message += `"ajouter [numéro] [quantité]"\n\n`;
-    
+
     const userStateCurrent = userStates.get(userId) || DEFAULT_STATE;
     if (userStateCurrent.panier && userStateCurrent.panier.length > 0) {
       message += `Votre panier contient ${userStateCurrent.panier.length} médicament(s).\n`;
@@ -1109,16 +1108,16 @@ async function rechercherEtAfficherMedicament(userId, nomMedicament) {
     } else {
       message += `Après ajout, dites "continuer" ou "terminer".\n`;
     }
-    
+
     await sendWhatsAppMessage(userId, message);
-    
+
     // Sauvegarder pour commande
     userState.resultatsRechercheMedicaments = medicamentsFiltres;
     userState.listeMedicamentsAvecIndex = listeMedicamentsAvecIndex;
     userState.attenteCommande = true;
     userState.step = 'ATTENTE_COMMANDE_MEDICAMENT';
     userStates.set(userId, userState);
-    
+
   } catch (error) {
     console.error('❌ Erreur recherche:', error.message);
     await sendWhatsAppMessage(
@@ -1131,36 +1130,36 @@ async function rechercherEtAfficherMedicament(userId, nomMedicament) {
 
 async function traiterCommandeMedicament(userId, message, userState) {
   const texte = message.toLowerCase().trim();
-  
+
   // Commander avec numéro
   const commandeRegex = /commander\s+(\d+)(?:\s+(\d+))?/i;
   const match = texte.match(commandeRegex);
-  
+
   // Ajouter au panier
   const ajouterRegex = /ajouter\s+(\d+)(?:\s+(\d+))?/i;
   const matchAjouter = texte.match(ajouterRegex);
-  
+
   if (match) {
     // Commande unique (ancien système)
     await traiterCommandeUnique(userId, match, userState);
-    
+
   } else if (matchAjouter) {
     // Ajouter au panier
     const numero = parseInt(matchAjouter[1]);
     const quantite = matchAjouter[2] ? parseInt(matchAjouter[2]) : 1;
-    
+
     if (quantite < 1 || quantite > 10) {
       await sendWhatsAppMessage(userId, "Quantité invalide (1-10).");
       return;
     }
-    
+
     const medicamentInfo = userState.listeMedicamentsAvecIndex.find(m => m.index === numero);
-    
+
     if (!medicamentInfo) {
       await sendWhatsAppMessage(userId, "Numéro invalide. Choisissez un numéro de la liste.");
       return;
     }
-    
+
     // Vérifier stock
     if (medicamentInfo.medicament.stock < quantite) {
       await sendWhatsAppMessage(
@@ -1170,17 +1169,28 @@ async function traiterCommandeMedicament(userId, message, userState) {
       );
       return;
     }
-    
+
+    // Vérifier ordonnance
+    if (medicamentInfo.medicament.necessiteOrdonnance) {
+      await sendWhatsAppMessage(
+        userId,
+        `Ce médicament nécessite une ordonnance.\n\n` +
+        `Envoyez la photo de votre ordonnance au support client via WhatsApp pour que votre commande soit prise en charge.\n\n` +
+        `Support : ${CONFIG.SUPPORT_PHONE}`
+      );
+      return;
+    }
+
     // Ajouter au panier
     await gestionPanier.ajouterAuPanier(userId, medicamentInfo, quantite);
-    
+
   } else if (texte.match(/^prix\s+(\d+)$/i)) {
     // Vérifier prix
     const matchPrix = texte.match(/^prix\s+(\d+)$/i);
     const numero = parseInt(matchPrix[1]);
-    
+
     const medicamentInfo = userState.listeMedicamentsAvecIndex.find(m => m.index === numero);
-    
+
     if (medicamentInfo) {
       const medicament = medicamentInfo.medicament;
       await sendWhatsAppMessage(
@@ -1212,22 +1222,22 @@ async function traiterCommandeMedicament(userId, message, userState) {
 async function traiterCommandeUnique(userId, match, userState) {
   const numero = parseInt(match[1]);
   const quantite = match[2] ? parseInt(match[2]) : 1;
-  
+
   // Validation
   if (quantite < 1 || quantite > 10) {
     await sendWhatsAppMessage(userId, "Quantité invalide (1-10).");
     return;
   }
-  
+
   const medicamentInfo = userState.listeMedicamentsAvecIndex.find(m => m.index === numero);
-  
+
   if (!medicamentInfo) {
     await sendWhatsAppMessage(userId, "Numéro invalide. Choisissez un numéro de la liste.");
     return;
   }
-  
+
   const medicament = medicamentInfo.medicament;
-  
+
   // Vérifier stock
   if (medicament.stock < quantite) {
     await sendWhatsAppMessage(
@@ -1237,13 +1247,24 @@ async function traiterCommandeUnique(userId, match, userState) {
     );
     return;
   }
-  
+
+  // Vérifier ordonnance
+  if (medicament.necessiteOrdonnance) {
+    await sendWhatsAppMessage(
+      userId,
+      `Ce médicament nécessite une ordonnance.\n\n` +
+      `Envoyez la photo de votre ordonnance au support client via WhatsApp pour que votre commande soit prise en charge.\n\n` +
+      `Support : ${CONFIG.SUPPORT_PHONE}`
+    );
+    return;
+  }
+
   // Calculer prix
   const prixUnitaire = medicament.prix || 0;
   const prixTotal = prixUnitaire * quantite;
   const fraisLivraison = getFraisLivraison();
   const total = prixTotal + fraisLivraison;
-  
+
   // Message de confirmation
   let messageConfirmation = `Commande préparée\n\n`;
   messageConfirmation += `${medicament.nom}\n`;
@@ -1252,22 +1273,15 @@ async function traiterCommandeUnique(userId, match, userState) {
   messageConfirmation += `Sous-total : ${prixTotal} FCFA\n`;
   messageConfirmation += `Livraison : ${fraisLivraison} FCFA\n`;
   messageConfirmation += `TOTAL : ${total} FCFA\n\n`;
-  
-  if (medicament.necessiteOrdonnance) {
-    messageConfirmation += `Ordonnance requise\n`;
-    messageConfirmation += `Envoyez la photo de votre ordonnance.\n\n`;
-    messageConfirmation += `Votre commande sera traitée après validation.`;
-  } else {
-    messageConfirmation += `Pour finaliser :\n`;
-    messageConfirmation += `Envoyez :\n`;
-    messageConfirmation += `"Nom: [Votre nom]\n`;
-    messageConfirmation += `Quartier: [Votre quartier à San Pedro]\n`;
-    messageConfirmation += `WhatsApp: [Votre numéro]\n`;
-    messageConfirmation += `Indications: [Repère pour livraison]"`;
-  }
-  
+  messageConfirmation += `Pour finaliser :\n`;
+  messageConfirmation += `Envoyez :\n`;
+  messageConfirmation += `"Nom: [Votre nom]\n`;
+  messageConfirmation += `Quartier: [Votre quartier à San Pedro]\n`;
+  messageConfirmation += `WhatsApp: [Votre numéro]\n`;
+  messageConfirmation += `Indications: [Repère pour livraison]"`;
+
   await sendWhatsAppMessage(userId, messageConfirmation);
-  
+
   // Sauvegarder commande
   userState.commandeEnCours = {
     medicamentId: medicament.id,
@@ -1281,7 +1295,7 @@ async function traiterCommandeUnique(userId, match, userState) {
     total: total,
     necessiteOrdonnance: medicament.necessiteOrdonnance
   };
-  
+
   userState.attenteCommande = false;
   userState.step = medicament.necessiteOrdonnance ? 'ATTENTE_ORDONNANCE' : 'ATTENTE_INFOS_LIVRAISON';
   userStates.set(userId, userState);
@@ -1291,13 +1305,13 @@ async function traiterCommandeUnique(userId, match, userState) {
 async function afficherPharmaciesDeGarde(userId) {
   try {
     await sendWhatsAppMessage(userId, "Recherche des pharmacies de garde...");
-    
+
     const snapshot = await db.collection('pharmacies')
       .where('estDeGarde', '==', true)
       .where('estOuvert', '==', true)
       .limit(5)
       .get();
-    
+
     if (snapshot.empty) {
       await sendWhatsAppMessage(
         userId,
@@ -1307,9 +1321,9 @@ async function afficherPharmaciesDeGarde(userId) {
       );
       return;
     }
-    
+
     let message = "Pharmacies de garde - San Pedro\n\n";
-    
+
     snapshot.docs.forEach((doc, index) => {
       const pharmacie = doc.data();
       message += `${index + 1}. ${pharmacie.nom || 'Pharmacie'}\n`;
@@ -1317,13 +1331,13 @@ async function afficherPharmaciesDeGarde(userId) {
       message += `   ${pharmacie.telephone || 'Non disponible'}\n`;
       message += `   ${pharmacie.horaires || '24h/24'}\n\n`;
     });
-    
+
     message += "Pour commander des médicaments :\n";
     message += "Écrivez simplement le nom du médicament\n\n";
     message += "Support : " + CONFIG.SUPPORT_PHONE;
-    
+
     await sendWhatsAppMessage(userId, message);
-    
+
   } catch (error) {
     console.error('❌ Erreur pharmacies:', error.message);
     await sendWhatsAppMessage(
@@ -1338,9 +1352,9 @@ async function afficherPharmaciesDeGarde(userId) {
 async function gererPriseRendezVous(userId, message) {
   const userState = userStates.get(userId) || { ...DEFAULT_STATE };
   const texte = message.toLowerCase().trim();
-  
+
   console.log(`📅 Traitement rendez-vous: "${message}"`);
-  
+
   // Étape 1: Détection de la demande de rendez-vous
   if (texte.includes('rendez-vous') || texte.includes('rdv') || texte.includes('consultation')) {
     userState.attenteSpecialiteRdv = true;
@@ -1348,30 +1362,30 @@ async function gererPriseRendezVous(userId, message) {
     await sendWhatsAppMessage(userId, "Avec quel type de médecin souhaitez-vous consulter ?");
     return;
   }
-  
+
   // Étape 2: Spécialité choisie
   if (userState.attenteSpecialiteRdv) {
     userState.specialiteRdv = texte;
     userState.attenteSpecialiteRdv = false;
     userStates.set(userId, userState);
-    
+
     // Chercher les cliniques pour cette spécialité
     await chercherCliniquesParSpecialitePourRdv(userId, texte);
     return;
   }
-  
+
   // Étape 3: Sélection de la clinique
   if (userState.attenteSelectionCliniqueRdv && texte.match(/^\d+$/)) {
     const numero = parseInt(texte);
     const cliniques = userState.listeCliniquesRdv || [];
-    
+
     if (numero >= 1 && numero <= cliniques.length) {
       const clinique = cliniques[numero - 1];
       userState.cliniqueSelectionneeRdv = clinique;
       userState.attenteSelectionCliniqueRdv = false;
       userState.attenteDateRdv = true;
       userStates.set(userId, userState);
-      
+
       await sendWhatsAppMessage(
         userId,
         `${clinique.nom}\n\n` +
@@ -1384,14 +1398,14 @@ async function gererPriseRendezVous(userId, message) {
       return;
     }
   }
-  
+
   // Étape 4: Date choisie
   if (userState.attenteDateRdv) {
     userState.dateRdv = texte;
     userState.attenteDateRdv = false;
     userState.attenteHeureRdv = true;
     userStates.set(userId, userState);
-    
+
     await sendWhatsAppMessage(
       userId,
       `Date : ${texte}\n\n` +
@@ -1400,14 +1414,14 @@ async function gererPriseRendezVous(userId, message) {
     );
     return;
   }
-  
+
   // Étape 5: Heure choisie
   if (userState.attenteHeureRdv) {
     userState.heureRdv = texte;
     userState.attenteHeureRdv = false;
     userState.attenteNomRdv = true;
     userStates.set(userId, userState);
-    
+
     await sendWhatsAppMessage(
       userId,
       `Heure : ${texte}\n\n` +
@@ -1415,14 +1429,14 @@ async function gererPriseRendezVous(userId, message) {
     );
     return;
   }
-  
+
   // Étape 6: Nom choisi
   if (userState.attenteNomRdv) {
     userState.nomRdv = texte;
     userState.attenteNomRdv = false;
     userState.attenteTelephoneRdv = true;
     userStates.set(userId, userState);
-    
+
     await sendWhatsAppMessage(
       userId,
       `Nom : ${texte}\n\n` +
@@ -1431,7 +1445,7 @@ async function gererPriseRendezVous(userId, message) {
     );
     return;
   }
-  
+
   // Étape 7: Téléphone choisi - FINALISATION
   if (userState.attenteTelephoneRdv) {
     await finaliserRendezVous(userId, texte, userState);
@@ -1442,25 +1456,25 @@ async function gererPriseRendezVous(userId, message) {
 async function chercherCliniquesParSpecialitePourRdv(userId, specialite) {
   try {
     const userState = userStates.get(userId) || DEFAULT_STATE;
-    
+
     await sendWhatsAppMessage(userId, `Recherche des cliniques pour "${specialite}"...`);
-    
+
     const snapshot = await db.collection('centres_sante')
       .where('estVerifie', '==', true)
       .get();
-    
+
     const cliniquesFiltrees = [];
     const motsCles = [specialite.toLowerCase()];
-    
+
     snapshot.docs.forEach(doc => {
       const centre = { id: doc.id, ...doc.data() };
-      
+
       // Vérifier dans les spécialités
       let specialiteTrouvee = false;
-      
+
       if (centre.specialites && Array.isArray(centre.specialites)) {
         for (const motCle of motsCles) {
-          const trouve = centre.specialites.some(s => 
+          const trouve = centre.specialites.some(s =>
             s && s.toLowerCase().includes(motCle.toLowerCase())
           );
           if (trouve) {
@@ -1469,11 +1483,11 @@ async function chercherCliniquesParSpecialitePourRdv(userId, specialite) {
           }
         }
       }
-      
+
       // Vérifier aussi dans les services
       if (!specialiteTrouvee && centre.services && Array.isArray(centre.services)) {
         for (const motCle of motsCles) {
-          const trouve = centre.services.some(s => 
+          const trouve = centre.services.some(s =>
             s && s.toLowerCase().includes(motCle.toLowerCase())
           );
           if (trouve) {
@@ -1482,44 +1496,44 @@ async function chercherCliniquesParSpecialitePourRdv(userId, specialite) {
           }
         }
       }
-      
+
       if (specialiteTrouvee) {
         cliniquesFiltrees.push(centre);
       }
     });
-    
+
     if (cliniquesFiltrees.length === 0) {
       // Obtenir les spécialités réelles
       const specialitesReelles = await obtenirSpecialitesReelles();
-      
+
       let messageErreur = `Recherche : "${specialite}"\n\n`;
       messageErreur += `Aucun médecin ou clinique trouvé pour cette spécialité.\n\n`;
-      
+
       if (specialitesReelles) {
         messageErreur += `Spécialités disponibles :\n`;
         messageErreur += specialitesReelles + `\n\n`;
       }
-      
+
       messageErreur += `Contactez le support : ${CONFIG.SUPPORT_PHONE}`;
-      
+
       await sendWhatsAppMessage(userId, messageErreur);
-      
+
       userState.attenteSpecialiteRdv = true;
       userStates.set(userId, userState);
       return;
     }
-    
+
     userState.listeCliniquesRdv = cliniquesFiltrees;
     userState.attenteSelectionCliniqueRdv = true;
     userStates.set(userId, userState);
-    
+
     let message = `Cliniques - ${specialite.toUpperCase()}\n\n`;
-    
+
     cliniquesFiltrees.forEach((clinique, index) => {
       message += `${index + 1}. ${clinique.nom || 'Clinique'}\n`;
       message += `   ${clinique.adresse || 'San Pedro'}\n`;
       if (clinique.telephone) message += `   ${clinique.telephone}\n`;
-      
+
       // Afficher les spécialités pertinentes
       if (clinique.specialites && Array.isArray(clinique.specialites)) {
         const specialitesFiltrees = clinique.specialites.filter(s => {
@@ -1529,23 +1543,23 @@ async function chercherCliniquesParSpecialitePourRdv(userId, specialite) {
           message += `   ${specialitesFiltrees.join(', ')}\n`;
         }
       }
-      
+
       // Afficher les horaires
       if (clinique.horaires) {
         const horaires = clinique.horaires;
         const lundi = horaires.Lundi || horaires.lundi;
         if (lundi) message += `   ${lundi}\n`;
       }
-      
+
       message += `\n`;
     });
-    
+
     message += `Pour choisir :\n`;
     message += `Répondez avec le numéro de la clinique\n\n`;
     message += `Exemple : "1" pour la première clinique`;
-    
+
     await sendWhatsAppMessage(userId, message);
-    
+
   } catch (error) {
     console.error('❌ Erreur recherche cliniques:', error.message);
     await sendWhatsAppMessage(
@@ -1562,17 +1576,17 @@ async function obtenirSpecialitesReelles() {
       .where('estVerifie', '==', true)
       .limit(5)
       .get();
-    
+
     if (snapshot.empty) {
       return null;
     }
-    
+
     const specialitesUniques = new Set();
-    
+
     // Collecter toutes les spécialités de toutes les cliniques
     for (const doc of snapshot.docs) {
       const centre = doc.data();
-      
+
       // Spécialités du centre
       if (centre.specialites && Array.isArray(centre.specialites)) {
         centre.specialites.forEach(spec => {
@@ -1581,7 +1595,7 @@ async function obtenirSpecialitesReelles() {
           }
         });
       }
-      
+
       // Services du centre
       if (centre.services && Array.isArray(centre.services)) {
         centre.services.forEach(service => {
@@ -1591,19 +1605,19 @@ async function obtenirSpecialitesReelles() {
         });
       }
     }
-    
+
     const specialitesListe = Array.from(specialitesUniques);
-    
+
     if (specialitesListe.length === 0) {
       return null;
     }
-    
+
     // Limiter et formater
     return specialitesListe
       .slice(0, 10)
       .map(spec => `• ${spec}`)
       .join('\n');
-    
+
   } catch (error) {
     console.error('Erreur récupération spécialités réelles:', error.message);
     return null;
@@ -1619,12 +1633,12 @@ async function finaliserRendezVous(userId, telephone, userState) {
       heureRdv,
       nomRdv
     } = userState;
-    
+
     if (!cliniqueSelectionneeRdv) {
       await sendWhatsAppMessage(userId, "Aucune clinique sélectionnée.");
       return;
     }
-    
+
     // Créer l'objet rendez-vous
     const rendezVousData = {
       centreSanteId: cliniqueSelectionneeRdv.id,
@@ -1642,10 +1656,10 @@ async function finaliserRendezVous(userId, telephone, userState) {
       typeConsultation: "presentiel",
       notes: `Rendez-vous via WhatsApp Pillbox - ${specialiteRdv} - Clinique: ${cliniqueSelectionneeRdv.nom}`
     };
-    
+
     // Enregistrer dans Firestore
     const rdvRef = await db.collection('rendez_vous').add(rendezVousData);
-    
+
     // Message de confirmation
     await sendWhatsAppMessage(
       userId,
@@ -1662,7 +1676,7 @@ async function finaliserRendezVous(userId, telephone, userState) {
       `Référence : RDV-${rdvRef.id.substring(0, 8)}\n` +
       `Support : ${CONFIG.SUPPORT_PHONE}`
     );
-    
+
     // Réinitialiser
     userState.attenteTelephoneRdv = false;
     userState.specialiteRdv = null;
@@ -1673,7 +1687,7 @@ async function finaliserRendezVous(userId, telephone, userState) {
     userState.nomRdv = null;
     userState.step = 'MENU_PRINCIPAL';
     userStates.set(userId, userState);
-    
+
   } catch (error) {
     console.error('❌ Erreur rendez-vous:', error.message);
     await sendWhatsAppMessage(
@@ -1688,7 +1702,7 @@ function convertirDateTimestamp(dateStr, heureStr) {
   try {
     // Convertir "demain", "lundi", etc.
     let date = new Date();
-    
+
     if (dateStr.toLowerCase() === 'demain') {
       date.setDate(date.getDate() + 1);
     } else if (dateStr.toLowerCase().includes('lundi')) {
@@ -1696,7 +1710,7 @@ function convertirDateTimestamp(dateStr, heureStr) {
       const jourDemande = dateStr.toLowerCase();
       const aujourdHui = date.getDay();
       const jourIndex = jours.findIndex(j => jourDemande.includes(j));
-      
+
       if (jourIndex > aujourdHui) {
         date.setDate(date.getDate() + (jourIndex - aujourdHui));
       } else {
@@ -1707,13 +1721,13 @@ function convertirDateTimestamp(dateStr, heureStr) {
       const [jour, mois, annee] = dateStr.split('/').map(Number);
       date = new Date(annee, mois - 1, jour);
     }
-    
+
     // Ajouter l'heure
     if (heureStr && heureStr.includes(':')) {
       const [heures, minutes] = heureStr.split(':').map(Number);
       date.setHours(heures, minutes, 0, 0);
     }
-    
+
     return admin.firestore.Timestamp.fromDate(date);
   } catch (error) {
     console.error('❌ Erreur conversion date:', error);
@@ -1733,12 +1747,12 @@ function genererServiceId(specialite) {
 async function afficherListeCliniquesReelles(userId) {
   try {
     await sendWhatsAppMessage(userId, "Recherche des cliniques à San Pedro...");
-    
+
     const snapshot = await db.collection('centres_sante')
       .where('estVerifie', '==', true)
       .limit(10)
       .get();
-    
+
     if (snapshot.empty) {
       await sendWhatsAppMessage(
         userId,
@@ -1748,15 +1762,15 @@ async function afficherListeCliniquesReelles(userId) {
       );
       return;
     }
-    
+
     let message = "Cliniques à San Pedro\n\n";
-    
+
     snapshot.docs.forEach((doc, index) => {
       const clinique = doc.data();
       message += `${index + 1}. ${clinique.nom || 'Clinique'}\n`;
       message += `   ${clinique.adresse || 'San Pedro'}\n`;
       if (clinique.telephone) message += `   ${clinique.telephone}\n`;
-      
+
       // Afficher les spécialités si disponibles
       if (clinique.specialites && Array.isArray(clinique.specialites)) {
         const specialitesAffichees = clinique.specialites
@@ -1766,23 +1780,23 @@ async function afficherListeCliniquesReelles(userId) {
           message += `   ${specialitesAffichees.join(', ')}\n`;
         }
       }
-      
+
       // Afficher un horaire si disponible
       if (clinique.horaires) {
         const horaires = clinique.horaires;
         const lundi = horaires.Lundi || horaires.lundi;
         if (lundi) message += `   ${lundi}\n`;
       }
-      
+
       message += `\n`;
     });
-    
+
     message += "Pour prendre rendez-vous :\n";
     message += 'Dites "rendez-vous [spécialité]"\n\n';
     message += "Support : " + CONFIG.SUPPORT_PHONE;
-    
+
     await sendWhatsAppMessage(userId, message);
-    
+
   } catch (error) {
     console.error('❌ Erreur liste cliniques:', error.message);
     await sendWhatsAppMessage(
@@ -1798,7 +1812,7 @@ async function afficherListeCliniquesReelles(userId) {
 async function traiterRechercheParImage(userId, mediaId, userState) {
   try {
     await sendWhatsAppMessage(userId, "Image reçue.");
-    
+
     await sendWhatsAppMessage(
       userId,
       "Pour rechercher un médicament par photo :\n\n" +
@@ -1809,10 +1823,10 @@ async function traiterRechercheParImage(userId, mediaId, userState) {
       "• Ibuprofène\n" +
       "• Amoxicilline"
     );
-    
+
     userState.attenteMedicamentImage = true;
     userStates.set(userId, userState);
-    
+
   } catch (error) {
     console.error('❌ Erreur image:', error.message);
     await sendWhatsAppMessage(userId, "Erreur d'analyse. Écrivez le nom du médicament.");
@@ -1833,7 +1847,7 @@ async function traiterImageOrdonnance(userId, userState) {
     'Indications: [Repère pour livraison]"\n\n' +
     "Service uniquement à San Pedro"
   );
-  
+
   userState.attentePhotoOrdonnance = false;
   userState.step = 'ATTENTE_INFOS_LIVRAISON';
   userStates.set(userId, userState);
@@ -1854,11 +1868,11 @@ async function traiterInfosLivraison(userId, message, userState) {
     );
     return;
   }
-  
+
   // Extraire informations
   const lines = message.split('\n');
   const infos = {};
-  
+
   lines.forEach(line => {
     const match = line.match(/^([^:]+):\s*(.+)$/);
     if (match) {
@@ -1867,11 +1881,11 @@ async function traiterInfosLivraison(userId, message, userState) {
       infos[cle] = valeur;
     }
   });
-  
+
   // Vérifier champs
   const champsRequis = ['nom', 'quartier', 'whatsapp'];
   const champsManquants = champsRequis.filter(champ => !infos[champ]);
-  
+
   if (champsManquants.length > 0) {
     await sendWhatsAppMessage(
       userId,
@@ -1889,9 +1903,9 @@ async function traiterInfosLivraison(userId, message, userState) {
     );
     return;
   }
-  
+
   // Vérifier San Pedro
-  if (!infos.quartier.toLowerCase().includes('san pedro') && 
+  if (!infos.quartier.toLowerCase().includes('san pedro') &&
       !infos.quartier.toLowerCase().includes('san-pedro')) {
     await sendWhatsAppMessage(
       userId,
@@ -1902,11 +1916,11 @@ async function traiterInfosLivraison(userId, message, userState) {
     );
     return;
   }
-  
+
   // Confirmation de commande
   const commande = userState.commandeEnCours;
   const numeroCommande = `CMD${Date.now().toString().slice(-6)}`;
-  
+
   await sendWhatsAppMessage(
     userId,
     `Commande confirmée #${numeroCommande}\n\n` +
@@ -1928,7 +1942,7 @@ async function traiterInfosLivraison(userId, message, userState) {
     `${CONFIG.SUPPORT_PHONE}\n` +
     `Référence : ${numeroCommande}`
   );
-  
+
   // Réinitialiser
   userState.commandeEnCours = null;
   userState.resultatsRechercheMedicaments = null;
@@ -1951,11 +1965,11 @@ async function traiterInfosLivraisonMulti(userId, message, userState) {
     );
     return;
   }
-  
+
   // Extraire informations
   const lines = message.split('\n');
   const infos = {};
-  
+
   lines.forEach(line => {
     const match = line.match(/^([^:]+):\s*(.+)$/);
     if (match) {
@@ -1964,11 +1978,11 @@ async function traiterInfosLivraisonMulti(userId, message, userState) {
       infos[cle] = valeur;
     }
   });
-  
+
   // Vérifier champs
   const champsRequis = ['nom', 'quartier', 'whatsapp'];
   const champsManquants = champsRequis.filter(champ => !infos[champ]);
-  
+
   if (champsManquants.length > 0) {
     await sendWhatsAppMessage(
       userId,
@@ -1986,9 +2000,9 @@ async function traiterInfosLivraisonMulti(userId, message, userState) {
     );
     return;
   }
-  
+
   // Vérifier San Pedro
-  if (!infos.quartier.toLowerCase().includes('san pedro') && 
+  if (!infos.quartier.toLowerCase().includes('san pedro') &&
       !infos.quartier.toLowerCase().includes('san-pedro')) {
     await sendWhatsAppMessage(
       userId,
@@ -1999,18 +2013,18 @@ async function traiterInfosLivraisonMulti(userId, message, userState) {
     );
     return;
   }
-  
+
   // Confirmation de commande
   const commande = userState.commandeEnCours;
   const panier = commande.panier || [];
   const numeroCommande = `CMD${Date.now().toString().slice(-6)}`;
-  
+
   let messageConfirmation = `Commande confirmée #${numeroCommande}\n\n`;
   messageConfirmation += `Client : ${infos.nom}\n`;
   messageConfirmation += `WhatsApp : ${infos.whatsapp}\n`;
   messageConfirmation += `Quartier : ${infos.quartier}\n`;
   if (infos.indications) messageConfirmation += `Indications : ${infos.indications}\n\n`;
-  
+
   messageConfirmation += `Votre commande (${panier.length} médicament(s)) :\n\n`;
   panier.forEach((item, index) => {
     messageConfirmation += `${index + 1}. ${item.medicamentNom} × ${item.quantite}\n`;
@@ -2018,22 +2032,22 @@ async function traiterInfosLivraisonMulti(userId, message, userState) {
     if (item.necessiteOrdonnance) messageConfirmation += `   Ordonnance requise\n`;
     messageConfirmation += `\n`;
   });
-  
+
   messageConfirmation += `Sous-total : ${commande.sousTotal} FCFA\n`;
   messageConfirmation += `Livraison : ${commande.fraisLivraison} FCFA\n`;
   messageConfirmation += `TOTAL À PAYER : ${commande.total} FCFA\n\n`;
-  
+
   messageConfirmation += `Prochaines étapes :\n`;
   messageConfirmation += `1. Validation par les pharmacies\n`;
   messageConfirmation += `2. Appel de confirmation\n`;
   messageConfirmation += `3. Livraison à domicile\n\n`;
-  
+
   messageConfirmation += `Support & suivi :\n`;
   messageConfirmation += `${CONFIG.SUPPORT_PHONE}\n`;
   messageConfirmation += `Référence : ${numeroCommande}`;
-  
+
   await sendWhatsAppMessage(userId, messageConfirmation);
-  
+
   // Réinitialiser
   userState.commandeEnCours = null;
   userState.panier = [];
@@ -2048,7 +2062,7 @@ app.get('/api/webhook', (req, res) => {
   const mode = req.query['hub.mode'];
   const token = req.query['hub.verify_token'];
   const challenge = req.query['hub.challenge'];
-  
+
   if (mode && token === CONFIG.VERIFY_TOKEN) {
     console.log('✅ Webhook vérifié avec succès');
     res.status(200).send(challenge);
@@ -2060,48 +2074,48 @@ app.get('/api/webhook', (req, res) => {
 
 app.post('/api/webhook', async (req, res) => {
   console.log('📩 Webhook POST reçu');
-  
+
   // Répondre immédiatement
   res.status(200).send('EVENT_RECEIVED');
-  
+
   try {
     const entry = req.body.entry?.[0];
     const changes = entry?.changes?.[0];
     const value = changes?.value;
     const message = value?.messages?.[0];
-    
+
     if (!message) {
       console.log('📩 Message vide ou non texte');
       return;
     }
-    
+
     // Ignorer messages non supportés
     if (message.type === 'unsupported' || message.type === 'system') {
       console.log('📩 Message non supporté ignoré');
       return;
     }
-    
+
     const userId = message.from;
     const messageType = message.type;
-    
+
     // Récupérer état utilisateur
     let userState = userStates.get(userId);
     if (!userState) {
       userState = { ...DEFAULT_STATE };
       userStates.set(userId, userState);
     }
-    
+
     if (messageType === 'text') {
       const text = message.text.body.trim();
-      
+
       console.log(`💬 ${userId}: "${text}"`);
-      
+
       // Vérifier doublons
       if (isDuplicateMessage(userId, text)) {
         console.log(`⚠️ Message dupliqué ignoré: "${text}"`);
         return;
       }
-      
+
       // Traitement avec verrou
       await withUserLock(userId, async () => {
         // Gestion du panier
@@ -2109,7 +2123,7 @@ app.post('/api/webhook', async (req, res) => {
         if (resultatPanier !== null) {
           return;
         }
-        
+
         // Vérifier états spéciaux
         if (userState.attenteMedicamentImage) {
           await rechercherEtAfficherMedicament(userId, text);
@@ -2117,29 +2131,29 @@ app.post('/api/webhook', async (req, res) => {
           userStates.set(userId, userState);
           return;
         }
-        
+
         if (userState.attenteMedicament) {
           await rechercherEtAfficherMedicament(userId, text);
           userState.attenteMedicament = false;
           userStates.set(userId, userState);
           return;
         }
-        
+
         if (userState.attenteCommande && userState.listeMedicamentsAvecIndex) {
           await traiterCommandeMedicament(userId, text, userState);
           return;
         }
-        
+
         if (userState.step === 'ATTENTE_INFOS_LIVRAISON') {
           await traiterInfosLivraison(userId, text, userState);
           return;
         }
-        
+
         if (userState.step === 'ATTENTE_INFOS_LIVRAISON_MULTI') {
           await traiterInfosLivraisonMulti(userId, text, userState);
           return;
         }
-        
+
         // États de rendez-vous
         if (userState.attenteSpecialiteRdv ||
             userState.attenteSelectionCliniqueRdv ||
@@ -2147,14 +2161,14 @@ app.post('/api/webhook', async (req, res) => {
             userState.attenteHeureRdv ||
             userState.attenteNomRdv ||
             userState.attenteTelephoneRdv) {
-          
+
           await gererPriseRendezVous(userId, text);
           return;
         }
-        
+
         // Utiliser Groq comme cerveau principal
         const result = await comprendreEtAgir(userId, text);
-        
+
         // Mettre à jour historique
         if (!userState.historiqueMessages) {
           userState.historiqueMessages = [];
@@ -2163,37 +2177,37 @@ app.post('/api/webhook', async (req, res) => {
           message: text,
           timestamp: new Date().toISOString()
         });
-        
+
         // Limiter historique
         if (userState.historiqueMessages.length > 20) {
           userState.historiqueMessages = userState.historiqueMessages.slice(-20);
         }
-        
+
         userStates.set(userId, userState);
       });
-      
+
     } else if (messageType === 'image') {
       const mediaId = message.image.id;
-      
+
       // Vérifier l'état de l'utilisateur
       if (userState.step === 'ATTENTE_ORDONNANCE') {
         // Ordonnance pour commande en cours
         await traiterImageOrdonnance(userId, userState);
-        
+
       } else if (userState.step === 'ATTENTE_ORDONNANCE_MULTI') {
         // Ordonnance pour commande multi-médicaments
         await traiterImageOrdonnance(userId, userState);
-        
+
       } else if (userState.attentePhotoOrdonnance) {
         // Ancien système
         await traiterImageOrdonnance(userId, userState);
-        
+
       } else {
         // Recherche de médicament par image
         await traiterRechercheParImage(userId, mediaId, userState);
       }
     }
-    
+
   } catch (error) {
     console.error('💥 ERREUR WEBHOOK:', error.message);
   }
@@ -2225,7 +2239,7 @@ app.get('/api/stats', (req, res) => {
     memory: process.memoryUsage(),
     uptime: process.uptime()
   };
-  
+
   res.json(stats);
 });
 
@@ -2234,7 +2248,7 @@ app.get('/api/test', async (req, res) => {
     const medicamentsCount = (await db.collection('medicaments').where('stock', '>', 0).limit(1).get()).size;
     const pharmaciesCount = (await db.collection('pharmacies').where('estDeGarde', '==', true).limit(1).get()).size;
     const cliniquesCount = (await db.collection('centres_sante').where('estVerifie', '==', true).limit(1).get()).size;
-    
+
     res.json({
       status: 'OK',
       firebase: {
@@ -2254,19 +2268,19 @@ app.get('/api/test', async (req, res) => {
 async function verifierDonneesInitiales() {
   try {
     console.log('🔍 Vérification des données initiales...');
-    
+
     const collections = ['medicaments', 'pharmacies', 'centres_sante'];
     const stats = {};
-    
+
     for (const collection of collections) {
       const snapshot = await db.collection(collection).limit(1).get();
       stats[collection] = !snapshot.empty;
     }
-    
+
     // Compter médicaments en stock
     const medicamentsSnapshot = await db.collection('medicaments').where('stock', '>', 0).limit(10).get();
     stats.medicaments_en_stock = medicamentsSnapshot.size;
-    
+
     // Compter pharmacies de garde
     const pharmaciesSnapshot = await db.collection('pharmacies')
       .where('estDeGarde', '==', true)
@@ -2274,11 +2288,11 @@ async function verifierDonneesInitiales() {
       .limit(10)
       .get();
     stats.pharmacies_de_garde = pharmaciesSnapshot.size;
-    
+
     console.log('✅ Données initiales vérifiées:', stats);
-    
+
     return stats;
-    
+
   } catch (error) {
     console.error('⚠️ Erreur vérification données:', error.message);
     return { error: error.message };
@@ -2309,7 +2323,7 @@ app.listen(PORT, HOST, () => {
 setInterval(() => {
   const now = Date.now();
   const uneHeure = 60 * 60 * 1000;
-  
+
   // Nettoyer états inactifs
   for (const [userId, state] of userStates.entries()) {
     const lastMessage = state.historiqueMessages?.[state.historiqueMessages?.length - 1];
@@ -2321,7 +2335,7 @@ setInterval(() => {
       }
     }
   }
-  
+
   // Nettoyer verrous
   for (const [userId, lockTime] of processingLocks.entries()) {
     if (now - lockTime > 30000) {
