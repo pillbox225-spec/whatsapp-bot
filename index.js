@@ -802,30 +802,28 @@ async function sendWhatsAppMessage(to, text) {
   }
 }
 
-// Fonction pour envoyer l'indicateur de saisie
+// Fonction pour envoyer l'indicateur de saisie CORRIGÉE
 async function sendTypingIndicator(userId) {
   try {
     await axios.post(
       `https://graph.facebook.com/v19.0/${CONFIG.PHONE_NUMBER_ID}/messages`,
       {
         messaging_product: "whatsapp",
-        recipient_type: "individual",
-        to: userId,
-        type: "interactive",
-        interactive: {
-          type: "typing_on",
-        },
+        status: "typing_on",
+        recipient_id: userId,
+        to: userId
       },
       {
         headers: {
           'Authorization': `Bearer ${CONFIG.WHATSAPP_TOKEN}`,
           'Content-Type': 'application/json'
         },
-        timeout: 10000
+        timeout: 5000
       }
     );
   } catch (error) {
-    console.error('❌ Erreur envoi indicateur de saisie:', error.response?.data || error.message);
+    // Ignorer les erreurs de typing indicator
+    console.log('⚠️ Indicateur de saisie ignoré:', error.message);
   }
 }
 
@@ -844,11 +842,11 @@ async function markMessageAsRead(messageId) {
           'Authorization': `Bearer ${CONFIG.WHATSAPP_TOKEN}`,
           'Content-Type': 'application/json'
         },
-        timeout: 10000
+        timeout: 5000
       }
     );
   } catch (error) {
-    console.error('❌ Erreur marquage message comme lu:', error.response?.data || error.message);
+    console.log('⚠️ Marquage message comme lu ignoré:', error.message);
   }
 }
 
@@ -1955,8 +1953,25 @@ async function traiterImageOrdonnance(userId, userState) {
   userStates.set(userId, userState);
 }
 
+// =================== FONCTIONS UTILITAIRES D'EXTRACTION ===================
+function nettoyerTexte(texte) {
+  if (!texte) return '';
+  return texte
+    .replace(/[`´‘’'"]/g, "'")  // Normaliser apostrophes
+    .replace(/\s+/g, ' ')      // Espaces multiples -> simple
+    .trim();
+}
+
+function extractValue(text, key) {
+  const regex = new RegExp(`${key}:\\s*([^\\n]+)`, 'i');
+  const match = text.match(regex);
+  return match ? nettoyerTexte(match[1]) : null;
+}
+
 // =================== TRAITEMENT INFORMATIONS DE LIVRAISON ===================
 async function traiterInfosLivraison(userId, message, userState) {
+  console.log(`📦 Traitement infos livraison simple: "${message.substring(0, 50)}..."`);
+
   // Instructions
   if (message.toLowerCase().includes('exemple') || message.toLowerCase().includes('comment')) {
     await sendWhatsAppMessage(
@@ -1972,17 +1987,14 @@ async function traiterInfosLivraison(userId, message, userState) {
   }
 
   // Extraire informations
-  const lines = message.split('\n');
-  const infos = {};
+  const infos = {
+    nom: extractValue(message, 'Nom'),
+    quartier: extractValue(message, 'Quartier'),
+    whatsapp: extractValue(message, 'WhatsApp'),
+    indications: extractValue(message, 'Indications')
+  };
 
-  lines.forEach(line => {
-    const match = line.match(/^([^:]+):\s*(.+)$/);
-    if (match) {
-      const cle = match[1].trim().toLowerCase().replace(/[^a-zéèêàâôûîïëüö]/g, '');
-      const valeur = match[2].trim();
-      infos[cle] = valeur;
-    }
-  });
+  console.log('📋 Infos extraites (simple):', infos);
 
   // Vérifier champs
   const champsRequis = ['nom', 'quartier', 'whatsapp'];
@@ -2008,13 +2020,19 @@ async function traiterInfosLivraison(userId, message, userState) {
 
   // Vérifier San Pedro
   if (!infos.quartier.toLowerCase().includes('san pedro') &&
-      !infos.quartier.toLowerCase().includes('san-pedro')) {
+      !infos.quartier.toLowerCase().includes('san-pedro') &&
+      !infos.quartier.toLowerCase().includes('lac')) {
     await sendWhatsAppMessage(
       userId,
       "Service uniquement à San Pedro\n\n" +
-      "Votre quartier doit être à San Pedro.\n\n" +
+      `Votre quartier "${infos.quartier}" doit être à San Pedro.\n\n` +
+      "Exemples de quartiers acceptés :\n" +
+      "• Lac (San Pedro)\n" +
+      "• Résidentiel (San Pedro)\n" +
+      "• Quartier administratif (San Pedro)\n" +
+      "• BTP (San Pedro)\n\n" +
       "Corrigez votre quartier :\n" +
-      `"Quartier: [quartier à San Pedro]"`
+      '"Quartier: [quartier à San Pedro]"'
     );
     return;
   }
@@ -2054,32 +2072,41 @@ async function traiterInfosLivraison(userId, message, userState) {
 }
 
 async function traiterInfosLivraisonMulti(userId, message, userState) {
+  console.log(`📦 Traitement infos livraison multi: "${message.substring(0, 50)}..."`);
+  console.log('🔍 État utilisateur:', {
+    step: userState.step,
+    commandeEnCours: !!userState.commandeEnCours,
+    panier: userState.panier?.length || 0
+  });
+
   // Instructions
   if (message.toLowerCase().includes('exemple') || message.toLowerCase().includes('comment')) {
     await sendWhatsAppMessage(
       userId,
       "Format pour plusieurs médicaments :\n\n" +
-      "Copiez et complétez ces 4 lignes :\n\n" +
+      "Copiez et complétez exactement :\n\n" +
       "Nom: [votre nom complet]\n" +
       "Quartier: [votre quartier à San Pedro]\n" +
       "WhatsApp: [votre numéro WhatsApp]\n" +
-      "Indications: [repère pour la livraison]"
+      "Indications: [repère pour la livraison]\n\n" +
+      "Exemple :\n" +
+      "Nom: Jean Dupont\n" +
+      "Quartier: Lac San Pedro\n" +
+      "WhatsApp: 0701234567\n" +
+      "Indications: Maison bleue à côté du marché"
     );
     return;
   }
 
   // Extraire informations
-  const lines = message.split('\n');
-  const infos = {};
+  const infos = {
+    nom: extractValue(message, 'Nom'),
+    quartier: extractValue(message, 'Quartier'),
+    whatsapp: extractValue(message, 'WhatsApp'),
+    indications: extractValue(message, 'Indications')
+  };
 
-  lines.forEach(line => {
-    const match = line.match(/^([^:]+):\s*(.+)$/);
-    if (match) {
-      const cle = match[1].trim().toLowerCase().replace(/[^a-zéèêàâôûîïëüö]/g, '');
-      const valeur = match[2].trim();
-      infos[cle] = valeur;
-    }
-  });
+  console.log('📋 Infos extraites (multi):', infos);
 
   // Vérifier champs
   const champsRequis = ['nom', 'quartier', 'whatsapp'];
@@ -2097,7 +2124,7 @@ async function traiterInfosLivraisonMulti(userId, message, userState) {
           default: return `• ${champ}`;
         }
       }).join('\n') + `\n\n` +
-      `Utilisez ce format :\n` +
+      `Utilisez ce format exact :\n` +
       `"Nom: ...\nQuartier: ...\nWhatsApp: ..."`
     );
     return;
@@ -2105,13 +2132,19 @@ async function traiterInfosLivraisonMulti(userId, message, userState) {
 
   // Vérifier San Pedro
   if (!infos.quartier.toLowerCase().includes('san pedro') &&
-      !infos.quartier.toLowerCase().includes('san-pedro')) {
+      !infos.quartier.toLowerCase().includes('san-pedro') &&
+      !infos.quartier.toLowerCase().includes('lac')) {
     await sendWhatsAppMessage(
       userId,
       "Service uniquement à San Pedro\n\n" +
-      "Votre quartier doit être à San Pedro.\n\n" +
+      `Votre quartier "${infos.quartier}" doit être à San Pedro.\n\n` +
+      "Exemples de quartiers acceptés :\n" +
+      "• Lac (San Pedro)\n" +
+      "• Résidentiel (San Pedro)\n" +
+      "• Quartier administratif (San Pedro)\n" +
+      "• BTP (San Pedro)\n\n" +
       "Corrigez votre quartier :\n" +
-      `"Quartier: [quartier à San Pedro]"`
+      '"Quartier: [quartier à San Pedro]"'
     );
     return;
   }
@@ -2319,6 +2352,7 @@ app.post('/api/webhook', async (req, res) => {
 
     } catch (error) {
       console.error('💥 ERREUR WEBHOOK:', error.message);
+      console.error(error.stack);
     }
   });
 });
@@ -2329,7 +2363,7 @@ app.get('/health', (req, res) => {
     status: 'OK',
     timestamp: new Date().toISOString(),
     service: 'Pillbox WhatsApp Bot PRODUCTION',
-    version: '3.0.0',
+    version: '3.0.1',
     users_actifs: userStates.size,
     uptime: process.uptime(),
     memory: process.memoryUsage(),
@@ -2413,7 +2447,7 @@ async function verifierDonneesInitiales() {
 app.listen(PORT, HOST, () => {
   console.log(`
 =======================================================
-🚀 PILLBOX WHATSAPP BOT - PRODUCTION V3.0
+🚀 PILLBOX WHATSAPP BOT - PRODUCTION V3.0.1
 =======================================================
 📍 Port: ${PORT}
 🏙️ Zone: San Pedro uniquement
@@ -2422,9 +2456,9 @@ app.listen(PORT, HOST, () => {
 📞 Support: ${CONFIG.SUPPORT_PHONE}
 =======================================================
 ✅ PRÊT À RECEVOIR DES MESSAGES !
-✅ Gestion intelligente du contexte
-✅ Achats multi-médicaments
-✅ Compréhension des références
+✅ Indicateur de saisie corrigé
+✅ Traitement infos livraison amélioré
+✅ Gestion des quartiers de San Pedro
 =======================================================
   `);
 });
