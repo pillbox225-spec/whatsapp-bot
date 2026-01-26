@@ -687,6 +687,14 @@ const DEFAULT_STATE = {
   attenteWhatsApp: false,
   attenteIndications: false,
 
+  // États post-interaction
+  apresCommande: false,
+  apresRendezVous: false,
+  derniereCommandeRef: null,
+  dernierRdvRef: null,
+  dernierLivreurNom: null,
+  dernierLivreurTel: null,
+
   // Contexte
   contexte: {
     historiqueConversation: [],
@@ -834,6 +842,134 @@ async function markMessageAsRead(messageId) {
   } catch (error) {
     console.error('❌ Erreur marquage message comme lu:', error.response?.data || error.message);
   }
+}
+
+// =================== GESTION DES REMERCIEMENTS ET SUIVI ===================
+async function gererRemerciementsEtSuivi(userId, message, userState) {
+  const texte = message.toLowerCase().trim();
+  
+  // Détecter les remerciements
+  const remerciements = ['merci', 'thanks', 'thank you', 'merci beaucoup', 'super', 'parfait', 'génial'];
+  const estRemerciement = remerciements.some(mot => texte.includes(mot));
+  
+  // Détecter les demandes de suivi
+  const suiviMots = ['suivi', 'suivre', 'statut', 'où en est', 'avancement', 'attends', 'attendre'];
+  const estDemandeSuivi = suiviMots.some(mot => texte.includes(mot));
+  
+  // Détecter les nouvelles demandes
+  const nouvelleDemandeMots = ['autre', 'encore', 'nouveau', 'différent', 'acheter', 'commander', 'médicament', 'pharmacie', 'rendez-vous', 'rdv'];
+  const estNouvelleDemande = nouvelleDemandeMots.some(mot => texte.includes(mot));
+  
+  // Vérifier les demandes spécifiques de suivi RDV
+  if (texte.includes('suivi rdv') || texte.includes('statut rendez-vous') || 
+      texte.includes('où en est mon rdv') || texte.includes('mon rendez-vous')) {
+    
+    if (userState.dernierRdvRef) {
+      await sendWhatsAppMessage(
+        userId,
+        `📅 **SUIVI RENDEZ-VOUS**\n\n` +
+        `🔢 Référence : ${userState.dernierRdvRef}\n` +
+        `📊 Statut : En attente de confirmation\n` +
+        `🏥 Clinique : Vous contactera sous peu\n\n` +
+        `La clinique vous appellera pour confirmer votre rendez-vous.\n\n` +
+        `📞 Pour toute question : ${CONFIG.SUPPORT_PHONE}`
+      );
+    } else {
+      await sendWhatsAppMessage(
+        userId,
+        `Je ne vois pas de rendez-vous récent dans votre historique.\n\n` +
+        `Souhaitez-vous prendre un nouveau rendez-vous ?\n` +
+        `Dites "rendez-vous" pour commencer.`
+      );
+    }
+    return true;
+  }
+  
+  // État "après commande"
+  if (userState.apresCommande) {
+    if (estRemerciement) {
+      await sendWhatsAppMessage(
+        userId,
+        `🙏 Je vous en prie ! C'est un plaisir de vous aider.\n\n` +
+        `Votre commande #${userState.derniereCommandeRef || ''} est en cours de traitement.\n\n` +
+        `N'hésitez pas si vous avez d'autres questions ou besoins ! 😊`
+      );
+      
+      // Réinitialiser l'état après commande
+      userState.apresCommande = false;
+      userStates.set(userId, userState);
+      return true;
+    }
+    
+    if (estDemandeSuivi) {
+      await sendWhatsAppMessage(
+        userId,
+        `📊 **SUIVI DE COMMANDE**\n\n` +
+        `🔢 Référence : ${userState.derniereCommandeRef || 'CMD...'}\n` +
+        `⏰ Délai estimé : 45-60 minutes\n` +
+        `📱 Livreur : ${userState.dernierLivreurNom || 'liv liv'}\n` +
+        `☎️ Contact livreur : ${userState.dernierLivreurTel || '0709548980'}\n\n` +
+        `**Étapes :**\n` +
+        `✅ Commande confirmée\n` +
+        `📦 Préparation en cours\n` +
+        `🚴 Livreur assigné\n` +
+        `🏠 Livraison à domicile\n\n` +
+        `📞 Pour tout renseignement : ${CONFIG.SUPPORT_PHONE}`
+      );
+      return true;
+    }
+    
+    if (estNouvelleDemande) {
+      // Réinitialiser pour nouvelle demande
+      userState.apresCommande = false;
+      userStates.set(userId, userState);
+      return false; // Laisser Groq traiter
+    }
+  }
+  
+  // État "après rendez-vous"
+  if (userState.apresRendezVous) {
+    if (estRemerciement) {
+      await sendWhatsAppMessage(
+        userId,
+        `🙏 Avec plaisir ! Je suis contente d'avoir pu vous aider pour votre rendez-vous.\n\n` +
+        `Votre rendez-vous ${userState.dernierRdvRef || ''} est en attente de confirmation.\n\n` +
+        `Besoin d'autre chose ? Je suis à votre disposition ! 😊`
+      );
+      
+      userState.apresRendezVous = false;
+      userStates.set(userId, userState);
+      return true;
+    }
+  }
+  
+  // Détection générale des remerciements
+  if (estRemerciement && !userState.apresCommande && !userState.apresRendezVous) {
+    await sendWhatsAppMessage(
+      userId,
+      `😊 Je vous en prie ! N'hésitez pas si vous avez besoin d'aide pour :\n\n` +
+      `💊 Acheter des médicaments\n` +
+      `🏥 Trouver une pharmacie de garde\n` +
+      `📅 Prendre un rendez-vous médical\n` +
+      `🏩 Localiser des cliniques\n\n` +
+      `Comment puis-je vous aider aujourd'hui ?`
+    );
+    return true;
+  }
+  
+  // Détection des confirmations d'attente
+  if (texte.includes("j'attends") || texte.includes("j’attends") || 
+      texte.includes("attends") || texte.includes("ok j'attends")) {
+    await sendWhatsAppMessage(
+      userId,
+      `👌 Parfait ! Votre commande est bien prise en charge.\n\n` +
+      `Je vous informerai dès qu'il y aura une mise à jour.\n\n` +
+      `En attendant, puis-je vous aider pour autre chose ?`
+    );
+    return true;
+  }
+  
+  return false;
 }
 
 // =================== CERVEAU PRINCIPAL - GROQ ===================
@@ -1674,6 +1810,7 @@ async function finaliserRendezVous(userId, telephone, userState) {
 
     // Enregistrer dans Firestore
     const rdvRef = await db.collection('rendez_vous').add(rendezVousData);
+    const rdvReference = `RDV-${rdvRef.id.substring(0, 8)}`;
 
     // Message de confirmation
     await sendWhatsAppMessage(
@@ -1688,11 +1825,19 @@ async function finaliserRendezVous(userId, telephone, userState) {
       `⏰ Heure : ${heureRdv}\n` +
       `📊 Statut : En attente de confirmation\n\n` +
       `La clinique vous contactera pour confirmation.\n\n` +
-      `🔢 Référence : RDV-${rdvRef.id.substring(0, 8)}\n` +
+      `📱 **Pour suivre votre rendez-vous :**\n` +
+      `• Dites "suivi rdv" ou "statut rendez-vous"\n` +
+      `• Dites "merci" pour confirmer\n` +
+      `• Dites "autre" pour une nouvelle demande\n\n` +
+      `🔢 **Référence :** ${rdvReference}\n` +
       `📞 Support : ${CONFIG.SUPPORT_PHONE}`
     );
 
-    // Réinitialiser
+    // Enregistrer l'état "après rendez-vous"
+    userState.apresRendezVous = true;
+    userState.dernierRdvRef = rdvReference;
+
+    // Réinitialiser les autres états
     userState.attenteTelephoneRdv = false;
     userState.specialiteRdv = null;
     userState.cliniqueSelectionneeRdv = null;
@@ -2226,11 +2371,26 @@ async function sendConfirmationFinale(userId, userState, commande, numeroCommand
   message += `4. 🏠 Livraison à votre adresse\n\n`;
 
   message += `⏰ **Délai estimé :** 45-60 minutes\n\n`;
+  
+  message += `📱 **Pour suivre votre commande :**\n`;
+  message += `• Dites "suivi" ou "où en est ma commande ?"\n`;
+  message += `• Dites "merci" pour confirmer\n`;
+  message += `• Dites "autre" pour une nouvelle demande\n\n`;
+  
   message += `📞 **Support & suivi :**\n`;
   message += `${CONFIG.SUPPORT_PHONE}\n`;
   message += `🔢 **Référence :** ${numeroCommande}`;
 
   await sendWhatsAppMessage(userId, message);
+  
+  // Enregistrer l'état "après commande"
+  userState.apresCommande = true;
+  userState.derniereCommandeRef = numeroCommande;
+  if (livreurInfo) {
+    userState.dernierLivreurNom = livreurInfo.nom;
+    userState.dernierLivreurTel = livreurInfo.telephone;
+  }
+  userStates.set(userId, userState);
 }
 
 async function sendConfirmationFinaleMulti(userId, userState, commande, numeroCommande, livreurInfo) {
@@ -2270,11 +2430,26 @@ async function sendConfirmationFinaleMulti(userId, userState, commande, numeroCo
   message += `4. 🏠 Livraison à votre adresse\n\n`;
 
   message += `⏰ **Délai estimé :** 45-60 minutes\n\n`;
+  
+  message += `📱 **Pour suivre votre commande :**\n`;
+  message += `• Dites "suivi" ou "où en est ma commande ?"\n`;
+  message += `• Dites "merci" pour confirmer\n`;
+  message += `• Dites "autre" pour une nouvelle demande\n\n`;
+  
   message += `📞 **Support & suivi :**\n`;
   message += `${CONFIG.SUPPORT_PHONE}\n`;
   message += `🔢 **Référence :** ${numeroCommande}`;
 
   await sendWhatsAppMessage(userId, message);
+  
+  // Enregistrer l'état "après commande"
+  userState.apresCommande = true;
+  userState.derniereCommandeRef = numeroCommande;
+  if (livreurInfo) {
+    userState.dernierLivreurNom = livreurInfo.nom;
+    userState.dernierLivreurTel = livreurInfo.telephone;
+  }
+  userStates.set(userId, userState);
 }
 
 function reinitialiserEtatUtilisateur(userId, userState) {
@@ -2291,6 +2466,7 @@ function reinitialiserEtatUtilisateur(userId, userState) {
   userState.attenteWhatsApp = false;
   userState.attenteIndications = false;
   userState.step = 'MENU_PRINCIPAL';
+  // NE PAS réinitialiser les états post-interaction
   userStates.set(userId, userState);
 }
 
@@ -2362,19 +2538,25 @@ app.post('/api/webhook', async (req, res) => {
 
         // Traitement avec verrou
         await withUserLock(userId, async () => {
+          // VÉRIFIER D'ABORD LES REMERCIEMENTS ET SUIVI
+          const traiteRemerciement = await gererRemerciementsEtSuivi(userId, text, userState);
+          if (traiteRemerciement) {
+            return;
+          }
+
           // États de collecte d'informations
           if (userState.step === 'ATTENTE_NOM' ||
-            userState.step === 'ATTENTE_QUARTIER' ||
-            userState.step === 'ATTENTE_WHATSAPP' ||
-            userState.step === 'ATTENTE_INDICATIONS') {
+              userState.step === 'ATTENTE_QUARTIER' ||
+              userState.step === 'ATTENTE_WHATSAPP' ||
+              userState.step === 'ATTENTE_INDICATIONS') {
             await collecterInfosLivraison(userId, text, userState);
             return;
           }
 
           if (userState.step === 'ATTENTE_NOM_MULTI' ||
-            userState.step === 'ATTENTE_QUARTIER_MULTI' ||
-            userState.step === 'ATTENTE_WHATSAPP_MULTI' ||
-            userState.step === 'ATTENTE_INDICATIONS_MULTI') {
+              userState.step === 'ATTENTE_QUARTIER_MULTI' ||
+              userState.step === 'ATTENTE_WHATSAPP_MULTI' ||
+              userState.step === 'ATTENTE_INDICATIONS_MULTI') {
             await collecterInfosLivraisonMulti(userId, text, userState);
             return;
           }
@@ -2407,11 +2589,11 @@ app.post('/api/webhook', async (req, res) => {
 
           // États de rendez-vous
           if (userState.attenteSpecialiteRdv ||
-            userState.attenteSelectionCliniqueRdv ||
-            userState.attenteDateRdv ||
-            userState.attenteHeureRdv ||
-            userState.attenteNomRdv ||
-            userState.attenteTelephoneRdv) {
+              userState.attenteSelectionCliniqueRdv ||
+              userState.attenteDateRdv ||
+              userState.attenteHeureRdv ||
+              userState.attenteNomRdv ||
+              userState.attenteTelephoneRdv) {
 
             await gererPriseRendezVous(userId, text);
             return;
@@ -2471,7 +2653,7 @@ app.get('/health', (req, res) => {
     status: 'OK',
     timestamp: new Date().toISOString(),
     service: 'Pillbox WhatsApp Bot PRODUCTION',
-    version: '3.1.0',
+    version: '3.2.0',
     users_actifs: userStates.size,
     uptime: process.uptime(),
     memory: process.memoryUsage(),
@@ -2555,7 +2737,7 @@ async function verifierDonneesInitiales() {
 app.listen(PORT, HOST, () => {
   console.log(`
 =======================================================
-🚀 PILLBOX WHATSAPP BOT - PRODUCTION V3.1
+🚀 PILLBOX WHATSAPP BOT - PRODUCTION V3.2
 =======================================================
 📍 Port: ${PORT}
 🏙️ Zone: San Pedro uniquement
@@ -2568,6 +2750,7 @@ app.listen(PORT, HOST, () => {
 ✅ Achats multi-médicaments
 ✅ Processus de livraison optimisé
 ✅ Informations collectées une par une
+✅ Gestion des remerciements et suivi
 =======================================================
   `);
 });
