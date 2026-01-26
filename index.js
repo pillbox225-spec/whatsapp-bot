@@ -16,13 +16,6 @@ const HOST = '0.0.0.0';
 let db;
 let FieldValue;
 
-// Quartiers valides de San Pedro
-const QUARTIERS_SAN_PEDRO = [
-  "lac", "centre-ville", "doba", "sogefiha", "port", "zone industrielle",
-  "cité administrative", "quartier résidentiel", "quartier commercial",
-  "gare", "airport", "saint-pierre", "zones industrielles", "ville", "centre"
-];
-
 // Initialisation Firebase
 (async () => {
   try {
@@ -68,10 +61,6 @@ const CONFIG = {
   SUPPORT_PHONE: "+2250701406868",
   LIVRAISON_JOUR: 400,
   LIVRAISON_NUIT: 600,
-  ZONE_SAN_PEDRO: {
-    minLat: 4.6, maxLat: 5.0,
-    minLng: -6.8, maxLng: -6.6
-  }
 };
 
 // =================== GESTIONNAIRE DE CONTEXTE ===================
@@ -98,7 +87,6 @@ class GestionnaireContexte {
 
   async mettreAJourContexte(userId, message, role = 'user') {
     const userState = userStates.get(userId) || { ...DEFAULT_STATE };
-
     if (!userState.contexte) {
       userState.contexte = JSON.parse(JSON.stringify(DEFAULT_STATE.contexte));
     }
@@ -125,13 +113,11 @@ class GestionnaireContexte {
     this.mettreAJourReferences(userId, message, userState);
 
     userStates.set(userId, userState);
-
     return userState.contexte;
   }
 
   async analyserMessageUtilisateur(userId, message, userState) {
     const texte = message.toLowerCase();
-
     // Détecter symptômes
     const symptomesDetectes = this.detecterSymptomes(texte);
     if (symptomesDetectes.length > 0) {
@@ -141,23 +127,18 @@ class GestionnaireContexte {
         }
       });
     }
-
     // Analyser émotion
     this.analyserEtatEmotionnel(userId, texte, userState);
-
     // Détecter références
     this.detecterReferencesImplicites(userId, texte, userState);
-
     // Extraire infos profil
     this.extraireInformationsProfil(texte, userState);
-
     // Enregistrer médicaments
     this.enregistrerMedicamentsMentionnes(texte, userState);
   }
 
   detecterSymptomes(texte) {
     const symptomes = [];
-
     for (const [symptome, motsCles] of Object.entries(this.motsClesSymptomes)) {
       for (const motCle of motsCles) {
         if (texte.includes(motCle)) {
@@ -166,7 +147,6 @@ class GestionnaireContexte {
         }
       }
     }
-
     return [...new Set(symptomes)];
   }
 
@@ -231,7 +211,6 @@ class GestionnaireContexte {
 
   detecterReferencesImplicites(userId, texte, userState) {
     const references = userState.contexte.references;
-
     // Pronoms de référence
     const pronoms = ['celui', 'celle', 'ceux', 'celles', 'ce', 'cet', 'cette'];
     const mots = texte.split(/\s+/);
@@ -511,7 +490,8 @@ class GestionPanier {
         prixUnitaire: medicamentInfo.medicament.prix || 0,
         necessiteOrdonnance: medicamentInfo.medicament.necessiteOrdonnance || false,
         dosage: medicamentInfo.medicament.dosage,
-        forme: medicamentInfo.medicament.forme
+        forme: medicamentInfo.medicament.forme,
+        imageUrl: medicamentInfo.medicament.imageUrls?.[0] || null
       });
     }
 
@@ -617,7 +597,10 @@ class GestionPanier {
     panier.forEach((item, index) => {
       message += `${index + 1}. ${item.medicamentNom} × ${item.quantite}\n`;
       message += `   ${item.prixUnitaire} FCFA × ${item.quantite} = ${item.prixUnitaire * item.quantite} FCFA\n`;
-      if (item.necessiteOrdonnance) message += `   Ordonnance requise\n`;
+      if (item.imageUrl) {
+        message += `   📷 [Image disponible]\n`;
+      }
+      if (item.necessiteOrdonnance) message += `   📄 Ordonnance requise\n`;
       message += `\n`;
     });
     return message;
@@ -884,7 +867,7 @@ ${resumeContexte}
 - Pour les pharmacies: consulter la base de données réelle
 - Pour les rendez-vous: extraire la spécialité
 - Pour les cliniques: consulter la base de données réelle
-- Pour conseils médicals: donner des conseils généraux mais toujours recommander de consulter un médecin
+- Pour conseils médicales: donner des conseils généraux mais toujours recommander de consulter un médecin
 - NE JAMAIS diagnostiquer
 
 ## ACTIONS DISPONIBLES:
@@ -1196,13 +1179,14 @@ async function rechercherEtAfficherMedicament(userId, nomMedicament) {
       message += `${numero}. ${medicament.nom}\n`;
       message += `   ${medicament.prix || '?'} FCFA\n`;
       message += `   ${pharmacie.nom}\n`;
-      message += `   ${medicament.stock || 0} disponible(s)\n`;
-
+      // NE PAS AFFICHER LE STOCK
       if (medicament.dosage || medicament.forme) {
         message += `   ${medicament.dosage || ''} ${medicament.forme || ''}\n`;
       }
-
-      message += `${medicament.necessiteOrdonnance ? 'Ordonnance requise' : 'Sans ordonnance'}\n\n`;
+      if (medicament.imageUrls && medicament.imageUrls.length > 0) {
+        message += `   📷 [Image disponible]\n`;
+      }
+      message += `${medicament.necessiteOrdonnance ? '📄 Ordonnance requise' : 'Sans ordonnance'}\n\n`;
     });
 
     message += `Pour ajouter au panier :\n`;
@@ -1269,16 +1253,6 @@ async function traiterCommandeMedicament(userId, message, userState) {
       return;
     }
 
-    // Vérifier stock
-    if (medicamentInfo.medicament.stock < quantite) {
-      await sendWhatsAppMessage(
-        userId,
-        `Stock insuffisant. Il ne reste que ${medicamentInfo.medicament.stock} disponible(s).\n\n` +
-        `Contactez le support : ${CONFIG.SUPPORT_PHONE}`
-      );
-      return;
-    }
-
     // Vérifier ordonnance
     if (medicamentInfo.medicament.necessiteOrdonnance) {
       await sendWhatsAppMessage(
@@ -1302,16 +1276,17 @@ async function traiterCommandeMedicament(userId, message, userState) {
 
     if (medicamentInfo) {
       const medicament = medicamentInfo.medicament;
-      await sendWhatsAppMessage(
-        userId,
-        `${medicament.nom}\n\n` +
-        `${medicamentInfo.pharmacieNom}\n` +
-        `${medicament.dosage || ''} ${medicament.forme || ''}\n` +
-        `Stock : ${medicament.stock || 0}\n` +
-        `${medicament.necessiteOrdonnance ? 'Ordonnance requise\n' : 'Sans ordonnance\n'}` +
-        `Ajouter au panier :\n` +
-        `"ajouter ${numero} [quantité]"`
-      );
+      let messagePrix = `${medicament.nom}\n\n`;
+      messagePrix += `${medicamentInfo.pharmacieNom}\n`;
+      messagePrix += `${medicament.dosage || ''} ${medicament.forme || ''}\n`;
+      if (medicament.imageUrls && medicament.imageUrls.length > 0) {
+        messagePrix += `📷 [Image disponible]\n`;
+      }
+      messagePrix += `${medicament.necessiteOrdonnance ? '📄 Ordonnance requise\n' : 'Sans ordonnance\n'}`;
+      messagePrix += `Ajouter au panier :\n`;
+      messagePrix += `"ajouter ${numero} [quantité]"`;
+
+      await sendWhatsAppMessage(userId, messagePrix);
     }
   } else {
     // Vérifier si c'est une commande de gestion de panier
@@ -1347,16 +1322,6 @@ async function traiterCommandeUnique(userId, match, userState) {
 
   const medicament = medicamentInfo.medicament;
 
-  // Vérifier stock
-  if (medicament.stock < quantite) {
-    await sendWhatsAppMessage(
-      userId,
-      `Stock insuffisant. Il ne reste que ${medicament.stock} disponible(s).\n\n` +
-      `Contactez le support : ${CONFIG.SUPPORT_PHONE}`
-    );
-    return;
-  }
-
   // Vérifier ordonnance
   if (medicament.necessiteOrdonnance) {
     await sendWhatsAppMessage(
@@ -1385,7 +1350,7 @@ async function traiterCommandeUnique(userId, match, userState) {
   messageConfirmation += `Pour finaliser :\n`;
   messageConfirmation += `Envoyez :\n`;
   messageConfirmation += `"Nom: [Votre nom]\n`;
-  messageConfirmation += `Quartier: [Votre quartier à San Pedro]\n`;
+  messageConfirmation += `Quartier: [Votre quartier]\n`;
   messageConfirmation += `WhatsApp: [Votre numéro]\n`;
   messageConfirmation += `Indications: [Repère pour livraison]"`;
 
@@ -1951,7 +1916,7 @@ async function traiterImageOrdonnance(userId, userState) {
     "Envoyez maintenant vos informations :\n\n" +
     "Format :\n" +
     '"Nom: [votre nom complet]\n' +
-    'Quartier: [votre quartier à San Pedro]\n' +
+    'Quartier: [votre quartier]\n' +
     'WhatsApp: [votre numéro WhatsApp]\n' +
     'Indications: [repère pour la livraison]"\n\n' +
     "Service uniquement à San Pedro"
@@ -1965,7 +1930,7 @@ async function traiterImageOrdonnance(userId, userState) {
 // =================== TRAITEMENT INFORMATIONS DE LIVRAISON ===================
 async function traiterInfosLivraison(userId, message, userState) {
   console.log(`📦 Traitement infos livraison: "${message}"`);
-  
+
   // Instructions
   if (message.toLowerCase().includes('exemple') || message.toLowerCase().includes('comment')) {
     await sendWhatsAppMessage(
@@ -1973,7 +1938,7 @@ async function traiterInfosLivraison(userId, message, userState) {
       "Format pour finaliser votre commande :\n\n" +
       "Copiez et complétez ces 4 lignes :\n\n" +
       "Nom: [votre nom complet]\n" +
-      "Quartier: [votre quartier à San Pedro]\n" +
+      "Quartier: [votre quartier]\n" +
       "WhatsApp: [votre numéro WhatsApp]\n" +
       "Indications: [repère pour livraison]"
     );
@@ -1990,7 +1955,7 @@ async function traiterInfosLivraison(userId, message, userState) {
 
   // Essayer différents formats d'extraction
   let infos = {};
-  
+
   // Méthode 1: Par lignes
   const lines = normalizedMessage.split('\n');
   lines.forEach(line => {
@@ -2039,26 +2004,6 @@ async function traiterInfosLivraison(userId, message, userState) {
       `Quartier: lac\n` +
       `WhatsApp: 0709548989\n` +
       `Indications: vers le marché`
-    );
-    return;
-  }
-
-  // Vérifier San Pedro - normaliser le quartier
-  const quartierNormalise = infos.quartier.toLowerCase();
-  const quartierValide = QUARTIERS_SAN_PEDRO.some(q => 
-    q.toLowerCase().includes(quartierNormalise) || 
-    quartierNormalise.includes(q.toLowerCase())
-  );
-
-  if (!quartierValide) {
-    await sendWhatsAppMessage(
-      userId,
-      "⚠️ Service uniquement à San Pedro\n\n" +
-      "Votre quartier doit être à San Pedro.\n\n" +
-      "**Quartiers disponibles :**\n" +
-      QUARTIERS_SAN_PEDRO.map(q => `• ${q}`).join('\n') + `\n\n` +
-      `Corrigez votre quartier :\n` +
-      `"Quartier: [un quartier de la liste ci-dessus]"`
     );
     return;
   }
@@ -2090,6 +2035,9 @@ async function traiterInfosLivraison(userId, message, userState) {
     `⏰ **Délai estimé :** 45-60 minutes`
   );
 
+  // Enregistrer la commande dans Firestore
+  await enregistrerCommande(userId, commande, infos, numeroCommande);
+
   // Réinitialiser
   userState.commandeEnCours = null;
   userState.resultatsRechercheMedicaments = null;
@@ -2102,7 +2050,7 @@ async function traiterInfosLivraison(userId, message, userState) {
 
 async function traiterInfosLivraisonMulti(userId, message, userState) {
   console.log(`📦 Traitement infos livraison multi: "${message}"`);
-  
+
   // Instructions
   if (message.toLowerCase().includes('exemple') || message.toLowerCase().includes('comment')) {
     await sendWhatsAppMessage(
@@ -2110,7 +2058,7 @@ async function traiterInfosLivraisonMulti(userId, message, userState) {
       "Format pour plusieurs médicaments :\n\n" +
       "Copiez et complétez ces 4 lignes :\n\n" +
       "Nom: [votre nom complet]\n" +
-      "Quartier: [votre quartier à San Pedro]\n" +
+      "Quartier: [votre quartier]\n" +
       "WhatsApp: [votre numéro WhatsApp]\n" +
       "Indications: [repère pour la livraison]"
     );
@@ -2127,7 +2075,7 @@ async function traiterInfosLivraisonMulti(userId, message, userState) {
 
   // Essayer différents formats d'extraction
   let infos = {};
-  
+
   // Méthode 1: Par lignes
   const lines = normalizedMessage.split('\n');
   lines.forEach(line => {
@@ -2176,26 +2124,6 @@ async function traiterInfosLivraisonMulti(userId, message, userState) {
       `Quartier: lac\n` +
       `WhatsApp: 0709548989\n` +
       `Indications: vers le marché`
-    );
-    return;
-  }
-
-  // Vérifier San Pedro - normaliser le quartier
-  const quartierNormalise = infos.quartier.toLowerCase();
-  const quartierValide = QUARTIERS_SAN_PEDRO.some(q => 
-    q.toLowerCase().includes(quartierNormalise) || 
-    quartierNormalise.includes(q.toLowerCase())
-  );
-
-  if (!quartierValide) {
-    await sendWhatsAppMessage(
-      userId,
-      "⚠️ Service uniquement à San Pedro\n\n" +
-      "Votre quartier doit être à San Pedro.\n\n" +
-      "**Quartiers disponibles :**\n" +
-      QUARTIERS_SAN_PEDRO.map(q => `• ${q}`).join('\n') + `\n\n` +
-      `Corrigez votre quartier :\n` +
-      `"Quartier: [un quartier de la liste ci-dessus]"`
     );
     return;
   }
@@ -2236,6 +2164,9 @@ async function traiterInfosLivraisonMulti(userId, message, userState) {
 
   await sendWhatsAppMessage(userId, messageConfirmation);
 
+  // Enregistrer la commande dans Firestore
+  await enregistrerCommandeMulti(userId, commande, infos, numeroCommande);
+
   // Réinitialiser
   userState.commandeEnCours = null;
   userState.panier = [];
@@ -2245,6 +2176,149 @@ async function traiterInfosLivraisonMulti(userId, message, userState) {
   userStates.set(userId, userState);
 
   console.log(`✅ Commande finalisée pour ${userId}`);
+}
+
+// =================== ENREGISTREMENT DES COMMANDES ===================
+async function enregistrerCommande(userId, commande, infos, numeroCommande) {
+  try {
+    const commandeData = {
+      clientId: userId,
+      date_commande: new Date().toISOString(),
+      date_modification: new Date().toISOString(),
+      date_suppression: null,
+      derniere_maj: new Date().toISOString(),
+      derniere_recherche: new Date().toISOString(),
+      statut: "en_attente",
+      Statut: "en_attente",
+
+      articles: [
+        {
+          medicamentId: commande.medicamentId,
+          nom: commande.medicamentNom,
+          pharmacieId: commande.pharmacieId,
+          pharmacienom: commande.pharmacieNom,
+          prix_unitaire: commande.prixUnitaire,
+          quantite: commande.quantite,
+          necessiteOrdonnance: commande.necessiteOrdonnance,
+          image_url: null // À compléter si image disponible
+        }
+      ],
+
+      livraison: {
+        adresse: infos.quartier,
+        code_securite: Math.floor(100000 + Math.random() * 900000).toString(),
+        dateAcceptation: null,
+        dateProposee: null,
+        date_recuperation: null,
+        livreurId: null,
+        livreurNom: null,
+        livreurProposeId: null,
+        livreurProposeNom: null,
+        statut_livraison: "en_attente",
+        statut_proposition: "en_attente_livreur",
+        position: null
+      },
+
+      paiement: {
+        mode: "cash_livraison",
+        montant_total: commande.total,
+        statut_paiement: "en_attente"
+      },
+
+      info_medicale: {
+        age: null,
+        genre: null,
+        poids: null,
+        taille: null,
+        imc: null,
+        categorieImc: null,
+        activite: null,
+        allergies: [],
+        traitementsEnCours: []
+      },
+
+      pharmacieId: commande.pharmacieId
+    };
+
+    // Enregistrer dans Firestore
+    await db.collection('commandes_medicales').add(commandeData);
+
+    console.log(`✅ Commande enregistrée: ${numeroCommande}`);
+
+  } catch (error) {
+    console.error('❌ Erreur enregistrement commande:', error.message);
+  }
+}
+
+async function enregistrerCommandeMulti(userId, commande, infos, numeroCommande) {
+  try {
+    const articles = commande.panier.map(item => ({
+      medicamentId: item.medicamentId,
+      nom: item.medicamentNom,
+      pharmacieId: item.pharmacieId,
+      pharmacienom: item.pharmacieNom,
+      prix_unitaire: item.prixUnitaire,
+      quantite: item.quantite,
+      necessiteOrdonnance: item.necessiteOrdonnance,
+      image_url: item.imageUrl || null
+    }));
+
+    const commandeData = {
+      clientId: userId,
+      date_commande: new Date().toISOString(),
+      date_modification: new Date().toISOString(),
+      date_suppression: null,
+      derniere_maj: new Date().toISOString(),
+      derniere_recherche: new Date().toISOString(),
+      statut: "en_attente",
+      Statut: "en_attente",
+
+      articles: articles,
+
+      livraison: {
+        adresse: infos.quartier,
+        code_securite: Math.floor(100000 + Math.random() * 900000).toString(),
+        dateAcceptation: null,
+        dateProposee: null,
+        date_recuperation: null,
+        livreurId: null,
+        livreurNom: null,
+        livreurProposeId: null,
+        livreurProposeNom: null,
+        statut_livraison: "en_attente",
+        statut_proposition: "en_attente_livreur",
+        position: null
+      },
+
+      paiement: {
+        mode: "cash_livraison",
+        montant_total: commande.total,
+        statut_paiement: "en_attente"
+      },
+
+      info_medicale: {
+        age: null,
+        genre: null,
+        poids: null,
+        taille: null,
+        imc: null,
+        categorieImc: null,
+        activite: null,
+        allergies: [],
+        traitementsEnCours: []
+      },
+
+      pharmacieId: commande.panier[0].pharmacieId // Prendre la première pharmacie
+    };
+
+    // Enregistrer dans Firestore
+    await db.collection('commandes_medicales').add(commandeData);
+
+    console.log(`✅ Commande multi enregistrée: ${numeroCommande}`);
+
+  } catch (error) {
+    console.error('❌ Erreur enregistrement commande multi:', error.message);
+  }
 }
 
 // =================== WEBHOOK WHATSAPP ===================
