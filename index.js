@@ -16,6 +16,13 @@ const HOST = '0.0.0.0';
 let db;
 let FieldValue;
 
+// Quartiers valides de San Pedro
+const QUARTIERS_SAN_PEDRO = [
+  "lac", "centre-ville", "doba", "sogefiha", "port", "zone industrielle",
+  "cité administrative", "quartier résidentiel", "quartier commercial"
+];
+
+// Initialisation Firebase
 (async () => {
   try {
     if (admin.apps.length === 0) {
@@ -65,12 +72,6 @@ const CONFIG = {
     minLng: -6.8, maxLng: -6.6
   }
 };
-
-// Quartiers valides de San Pedro
-const QUARTIERS_SAN_PEDRO = [
-  "lac", "centre-ville", "doba", "sogefiha", "port", "zone industrielle",
-  "cité administrative", "quartier résidentiel", "quartier commercial"
-];
 
 // =================== GESTIONNAIRE DE CONTEXTE ===================
 class GestionnaireContexte {
@@ -735,7 +736,7 @@ const DEFAULT_STATE = {
 const userStates = new Map();
 const processingLocks = new Map();
 const messageCache = new Map();
-const CACHE_DURATION = 5000;
+const CACHE_DURATION = 2000; // Réduit pour éviter les faux positifs
 
 // =================== FONCTIONS UTILITAIRES ===================
 function isDuplicateMessage(userId, message) {
@@ -765,13 +766,18 @@ async function withUserLock(userId, callback) {
     return null;
   }
 
-  processingLocks.set(userId, true);
+  processingLocks.set(userId, Date.now());
+
   try {
     return await callback();
   } finally {
+    // Libérer le verrou après 30 secondes maximum
     setTimeout(() => {
-      processingLocks.delete(userId);
-    }, 1000);
+      if (processingLocks.get(userId) === Date.now() - processingLocks.get(userId) > 30000) {
+        processingLocks.delete(userId);
+      }
+    }, 30000);
+    processingLocks.delete(userId);
   }
 }
 
@@ -834,16 +840,20 @@ async function markMessageAsRead(messageId) {
 // =================== CERVEAU PRINCIPAL - GROQ ===================
 async function comprendreEtAgir(userId, message) {
   console.log(`🧠 Analyse: "${message}"`);
+  const userState = userStates.get(userId) || { ...DEFAULT_STATE };
 
   // Mettre à jour le contexte
   const contexte = await gestionnaireContexte.mettreAJourContexte(userId, message, 'user');
   const resumeContexte = gestionnaireContexte.obtenirResumeContexte(userId);
 
-  // Détection directe des intentions courantes
+  // Détection directe des intentions courantes (pour éviter de dépendre de Groq)
   const messageLower = message.toLowerCase();
   if (messageLower.includes("acheter un médicament") ||
       messageLower.includes("acheter médicament") ||
       messageLower.includes("commander médicament")) {
+    await sendWhatsAppMessage(userId, "Quel médicament souhaitez-vous acheter ? Veuillez préciser le nom exact.");
+    userState.attenteMedicament = true;
+    userStates.set(userId, userState);
     return {
       action: "DEMANDE_NOM_MEDICAMENT",
       reponse: "Quel médicament souhaitez-vous acheter ? Veuillez préciser le nom exact.",
@@ -969,7 +979,7 @@ JSON uniquement:
           'Authorization': `Bearer ${CONFIG.GROQ_API_KEY}`,
           'Content-Type': 'application/json'
         },
-        timeout: 5000
+        timeout: 5000 // Timeout de 5 secondes
       }
     );
 
@@ -979,17 +989,25 @@ JSON uniquement:
     // Envoyer la réponse de Groq
     await sendWhatsAppMessage(userId, result.reponse);
 
+    // Mettre à jour l'état utilisateur selon l'action
+    if (result.action === 'DEMANDE_NOM_MEDICAMENT') {
+      userState.attenteMedicament = true;
+      userStates.set(userId, userState);
+    }
+
     // Exécuter l'action correspondante
     await executerAction(userId, result, message);
-
     return result;
 
   } catch (error) {
     console.error('❌ Erreur Groq:', error.message);
+    // Réponse de secours
     await sendWhatsAppMessage(
       userId,
-      "Désolé, une erreur technique est survenue. 📞 Contactez le support : " + CONFIG.SUPPORT_PHONE
+      "Je rencontre un léger retard. Veuillez préciser le nom du médicament que vous souhaitez acheter."
     );
+    userState.attenteMedicament = true;
+    userStates.set(userId, userState);
   }
 }
 
@@ -2274,7 +2292,7 @@ app.post('/api/webhook', async (req, res) => {
           }
 
           // Utiliser Groq comme cerveau principal
-          const result = await comprendreEtAgir(userId, text);
+          await comprendreEtAgir(userId, text);
 
           // Mettre à jour historique
           if (!userState.historiqueMessages) {
