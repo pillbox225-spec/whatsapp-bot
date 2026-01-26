@@ -232,7 +232,7 @@ class GestionnaireContexte {
   detecterConfusion(texte, userState) {
     const motsConfusion = ['ahok', 'quoi', 'comment', 'hein', 'pardon', 'je comprends pas', 'je vois pas'];
     const estConfus = motsConfusion.some(mot => texte.includes(mot));
-
+    
     if (estConfus) {
       userState.contexte.emotionnel.confusionNiveau = Math.min(10, userState.contexte.emotionnel.confusionNiveau + 2);
       userState.contexte.emotionnel.ton = 'confus';
@@ -867,134 +867,6 @@ async function markMessageAsRead(messageId) {
   }
 }
 
-// =================== GESTION DES REMERCIEMENTS ET SUIVI ===================
-async function gererRemerciementsEtSuivi(userId, message, userState) {
-  const texte = message.toLowerCase().trim();
-
-  // Détecter les remerciements
-  const remerciements = ['merci', 'thanks', 'thank you', 'merci beaucoup', 'super', 'parfait', 'génial'];
-  const estRemerciement = remerciements.some(mot => texte.includes(mot));
-
-  // Détecter les demandes de suivi
-  const suiviMots = ['suivi', 'suivre', 'statut', 'où en est', 'avancement', 'attends', 'attendre'];
-  const estDemandeSuivi = suiviMots.some(mot => texte.includes(mot));
-
-  // Détecter les nouvelles demandes
-  const nouvelleDemandeMots = ['autre', 'encore', 'nouveau', 'différent', 'acheter', 'commander', 'médicament', 'pharmacie', 'rendez-vous', 'rdv'];
-  const estNouvelleDemande = nouvelleDemandeMots.some(mot => texte.includes(mot));
-
-  // Vérifier les demandes spécifiques de suivi RDV
-  if (texte.includes('suivi rdv') || texte.includes('statut rendez-vous') ||
-      texte.includes('où en est mon rdv') || texte.includes('mon rendez-vous')) {
-
-    if (userState.dernierRdvRef) {
-      await sendWhatsAppMessage(
-        userId,
-        `📅 **SUIVI RENDEZ-VOUS**\n\n` +
-        `🔢 Référence : ${userState.dernierRdvRef}\n` +
-        `📊 Statut : En attente de confirmation\n` +
-        `🏥 Clinique : Vous contactera sous peu\n\n` +
-        `La clinique vous appellera pour confirmer votre rendez-vous.\n\n` +
-        `📞 Pour toute question : ${CONFIG.SUPPORT_PHONE}`
-      );
-    } else {
-      await sendWhatsAppMessage(
-        userId,
-        `Je ne vois pas de rendez-vous récent dans votre historique.\n\n` +
-        `Souhaitez-vous prendre un nouveau rendez-vous ?\n` +
-        `Dites "rendez-vous" pour commencer.`
-      );
-    }
-    return true;
-  }
-
-  // État "après commande"
-  if (userState.apresCommande) {
-    if (estRemerciement) {
-      await sendWhatsAppMessage(
-        userId,
-        `🙏 Je vous en prie ! C'est un plaisir de vous aider.\n\n` +
-        `Votre commande #${userState.derniereCommandeRef || ''} est en cours de traitement.\n\n` +
-        `N'hésitez pas si vous avez d'autres questions ou besoins ! 😊`
-      );
-
-      // Réinitialiser l'état après commande
-      userState.apresCommande = false;
-      userStates.set(userId, userState);
-      return true;
-    }
-
-    if (estDemandeSuivi) {
-      await sendWhatsAppMessage(
-        userId,
-        `📊 **SUIVI DE COMMANDE**\n\n` +
-        `🔢 Référence : ${userState.derniereCommandeRef || 'CMD...'}\n` +
-        `⏰ Délai estimé : 45-60 minutes\n` +
-        `📱 Livreur : ${userState.dernierLivreurNom || 'liv liv'}\n` +
-        `☎️ Contact livreur : ${userState.dernierLivreurTel || '0709548980'}\n\n` +
-        `**Étapes :**\n` +
-        `✅ Commande confirmée\n` +
-        `📦 Préparation en cours\n` +
-        `🚴 Livreur assigné\n` +
-        `🏠 Livraison à domicile\n\n` +
-        `📞 Pour tout renseignement : ${CONFIG.SUPPORT_PHONE}`
-      );
-      return true;
-    }
-
-    if (estNouvelleDemande) {
-      // Réinitialiser pour nouvelle demande
-      userState.apresCommande = false;
-      userStates.set(userId, userState);
-      return false; // Laisser Groq traiter
-    }
-  }
-
-  // État "après rendez-vous"
-  if (userState.apresRendezVous) {
-    if (estRemerciement) {
-      await sendWhatsAppMessage(
-        userId,
-        `🙏 Avec plaisir ! Je suis contente d'avoir pu vous aider pour votre rendez-vous.\n\n` +
-        `Votre rendez-vous ${userState.dernierRdvRef || ''} est en attente de confirmation.\n\n` +
-        `Besoin d'autre chose ? Je suis à votre disposition ! 😊`
-      );
-
-      userState.apresRendezVous = false;
-      userStates.set(userId, userState);
-      return true;
-    }
-  }
-
-  // Détection générale des remerciements
-  if (estRemerciement && !userState.apresCommande && !userState.apresRendezVous) {
-    await sendWhatsAppMessage(
-      userId,
-      `😊 Je vous en prie ! N'hésitez pas si vous avez besoin d'aide pour :\n\n` +
-      `💊 Acheter des médicaments\n` +
-      `🏥 Trouver une pharmacie de garde\n` +
-      `📅 Prendre un rendez-vous médical\n` +
-      `🏩 Localiser des cliniques\n\n` +
-      `Comment puis-je vous aider aujourd'hui ?`
-    );
-    return true;
-  }
-
-  // Détection des confirmations d'attente
-  if (texte.includes("j'attends") || texte.includes("j’attends") ||
-      texte.includes("attends") || texte.includes("ok j'attends")) {
-    await sendWhatsAppMessage(
-      userId,
-      `👌 Parfait ! Votre commande est bien prise en charge.\n\n` +
-      `Je vous informerai dès qu'il y aura une mise à jour.\n\n` +
-      `En attendant, puis-je vous aider pour autre chose ?`
-    );
-    return true;
-  }
-
-  return false;
-}
-
 // =================== CERVEAU PRINCIPAL INTELLIGENT - GROQ ===================
 async function comprendreEtAgir(userId, message) {
   console.log(`🧠 Analyse intelligente: "${message}"`);
@@ -1004,157 +876,63 @@ async function comprendreEtAgir(userId, message) {
   const contexte = await gestionnaireContexte.mettreAJourContexte(userId, message, 'user');
   const resumeContexte = gestionnaireContexte.obtenirResumeContexte(userId);
 
-  // Analyser l'intention et le contexte
-  const messageLower = message.toLowerCase();
-
-  // Détection de demande d'aide médicale urgente
-  if (messageLower.includes("aide moi") ||
-      messageLower.includes("s'il te plaît") ||
-      messageLower.includes("urgent") ||
-      messageLower.includes("mal à la tête") ||
-      messageLower.includes("mal a la tête") ||
-      messageLower.includes("mal a tête")) {
-
-    // D'abord répondre avec empathie
-    await sendWhatsAppMessage(userId, "🤕 Je vois que vous avez mal à la tête. Je peux vous aider de plusieurs façons :");
-
-    // Ensuite proposer des options
-    await sendWhatsAppMessage(userId,
-      "💊 **Médicaments disponibles pour les maux de tête :**\n" +
-      "• Paracétamol - pour la douleur légère à modérée\n" +
-      "• Ibuprofène - pour les douleurs inflammatoires\n\n" +
-      "🏥 **Autres options :**\n" +
-      "• Trouver une pharmacie de garde\n" +
-      "• Consulter un médecin\n" +
-      "• Obtenir des conseils médicaux\n\n" +
-      "Que souhaitez-vous faire ?"
-    );
-
-    // Mettre à jour le contexte
-    userState.attenteMedicament = true;
-    userStates.set(userId, userState);
-
-    return {
-      action: "CONSEIL_MEDICAL_URGENT",
-      reponse: "Proposé des options pour maux de tête"
-    };
-  }
-
-  // Détection de confusion (mot "ahok")
-  if (messageLower.includes("ahok")) {
-    await sendWhatsAppMessage(userId,
-      "Je comprends que vous avez peut-être plusieurs questions. Laissez-moi clarifier :\n\n" +
-      "Je peux vous aider pour :\n" +
-      "1. 💊 **Acheter un médicament** - Dites le nom exact\n" +
-      "2. 🏥 **Pharmacies de garde** - Disponibles 24h/24\n" +
-      "3. 👨‍⚕️ **Cliniques à San Pedro** - Avec leurs spécialités\n" +
-      "4. 📅 **Rendez-vous médicaux** - Avec des spécialistes\n\n" +
-      "Que souhaitez-vous faire ?"
-    );
-
-    userState.step = 'MENU_PRINCIPAL';
-    userStates.set(userId, userState);
-
-    return {
-      action: "CLARIFICATION_CONFUSION",
-      reponse: "Clarifié les options disponibles"
-    };
-  }
-
   try {
     const prompt = `
-Tu es Mia, assistante médicale à San Pedro. Analyse le message de l'utilisateur et comprends son intention réelle.
+Tu es Mia, assistante médicale à San Pedro. Tu as une conversation NATURELLE avec l'utilisateur, comme un humain. Pas de réponses scriptées, pas de messages fictifs.
 
 ## CONTEXTE DE LA CONVERSATION:
 ${resumeContexte}
 
-## MESSAGE UTILISATEUR:
+## DERNIER MESSAGE UTILISATEUR:
 "${message}"
 
-## ÉTAT ACTUEL DE L'UTILISATEUR:
-- Étape actuelle: ${userState.step}
-- Panier: ${userState.panier?.length || 0} médicament(s)
-- Dernière recherche: ${userState.resultatsRechercheMedicaments ? 'médicament trouvé' : 'aucune'}
-- Attente: ${userState.attenteMedicament ? 'nom médicament' :
-            userState.attenteNom ? 'nom client' :
-            userState.attenteRendezVous ? 'infos rdv' : 'aucune'}
+## INFORMATIONS IMPORTANTES:
+- Service uniquement à San Pedro
+- Médicaments réels depuis base de données
+- Pharmacies/cliniques réelles depuis base
+- Si info manquante, demande naturellement
 
 ## TON ET STYLE:
-- Empathique et professionnelle
-- Réponds toujours en français simple et clair
-- Clarifie les ambiguïtés
-- Propose des solutions concrètes
-- Si confusion, résume ce que tu as compris
+- Naturel comme une vraie conversation
+- Empathique mais pas robotique
+- Réponses courtes et spontanées
+- Si tu comprends pas, demande simplement
+- Pas de formules toutes faites
 
-## RÈGLES IMPORTANTES:
-- NE JAMAIS inventer de médicaments, pharmacies ou cliniques
-- Si tu ne sais pas, diriger vers le support
-- Pour médicaments: demander le nom EXACT
-- Pour pharmacies: consulter la base de données
-- Pour cliniques: donner les informations réelles
-- Service uniquement à San Pedro
+## CE QUE JE PEUX FAIRE:
+1. Chercher des médicaments (disponibilité, prix)
+2. Afficher pharmacies de garde (ouvertes maintenant)
+3. Lister cliniques à San Pedro
+4. Prendre rendez-vous médical
+5. Gérer panier multi-médicaments
+6. Conseils médicaux simples
 
-## ANALYSE À FAIRE:
-1. Quelle est l'intention PRIMAIRE ? (commander, information, urgence, clarification)
-2. Y a-t-il une demande IMPLICITE ? (besoin d'aide, confusion, frustration)
-3. Le message fait-il référence à un CONTEXTE PRÉCÉDENT ?
-4. L'utilisateur est-il en ATTENTE d'une réponse spécifique ?
+## EXEMPLES DE RÉPONSES NATURELLES:
 
-## ACTIONS DISPONIBLES:
-- RECHERCHE_MEDICAMENT → si demande de médicament spécifique
-- DEMANDE_NOM_MEDICAMENT → si veut acheter mais pas précis
-- PHARMACIE_GARDE → si "pharmacie de garde"
-- LISTE_CLINIQUES → si demande de cliniques
-- DEMANDE_RENDEZ_VOUS → si "rendez-vous" ou spécialité
-- CONSEIL_MEDICAL → si symptôme ou conseil
-- CLARIFICATION → si confusion ou répétition
-- CHANGEMENT_SUJET → si changement de sujet
-- SUPPORT → si problème technique
+Utilisateur: "Merci"
+→ "Avec plaisir ! 😊"
 
-## EXEMPLES DE SITUATIONS:
+Utilisateur: "Quelle pharmacie est de garde ?"
+→ "Je regarde les pharmacies ouvertes maintenant..."
 
-Utilisateur: "Ahok je vois qu'elle sont les cliniques disponible a san Pedro"
-→ Changement de sujet après médicaments
-{
-  "action": "CHANGEMENT_SUJET",
-  "reponse": "Je vois que vous souhaitez maintenant connaître les cliniques disponibles à San Pedro. Je recherche les cliniques pour vous...",
-  "parametres": {"ancien_sujet": "médicaments", "nouveau_sujet": "cliniques"},
-  "next_step": "LISTE_CLINIQUES"
-}
-
-Utilisateur: "Ok j'ai mal a la tête" (après avoir parlé de pharmacies)
-→ Expression de symptôme, besoin d'aide
-{
-  "action": "RECONNAISSANCE_SYMPTOME",
-  "reponse": "Je comprends que votre mal de tête vous préoccupe. Pour les maux de tête, je peux vous aider à trouver du paracétamol ou consulter un médecin si la douleur persiste. Que préférez-vous ?",
-  "parametres": {"symptome": "mal de tête", "urgence": "moyenne"},
-  "next_step": "ATTENTE_CHOIX"
-}
-
-Utilisateur: "Les pharmacies de garde aujourd'hui" (répétition)
-→ L'utilisateur insiste
-{
-  "action": "CLARIFICATION",
-  "reponse": "Je vais rechercher à nouveau les pharmacies de garde disponibles aujourd'hui à San Pedro...",
-  "parametres": null,
-  "next_step": "PHARMACIE_GARDE"
-}
+Utilisateur: "J'ai mal à la tête"
+→ "Désolée d'entendre ça. Pour les maux de tête, je peux t'aider à trouver du paracétamol. Ça te dit ?"
 
 Utilisateur: "Paracetamol"
-→ Demande simple et claire
-{
-  "action": "RECHERCHE_MEDICAMENT",
-  "reponse": "Je recherche du paracétamol pour vous...",
-  "parametres": {"nom_medicament": "paracétamol"},
-  "next_step": "RECHERCHE_MEDICAMENT"
-}
+→ "Je cherche du paracétamol..."
+
+Utilisateur: "Ahok"
+→ "Je vois que t'as plusieurs questions. Je peux t'aider pour médicaments, pharmacies, cliniques ou rendez-vous. Tu veux quoi ?"
+
+Utilisateur: "Je veux commander"
+→ "Ok ! Quel médicament tu veux ?"
 
 ## RÉPONSE FINALE (JSON uniquement):
 {
-  "action": "ACTION_DETERMINEE",
-  "reponse": "réponse naturelle et contextuelle en français",
-  "parametres": {"cle": "valeur"} ou null,
-  "next_step": "prochaine étape suggérée"
+  "action": "ACTION_NATURELLE",
+  "reponse": "réponse naturelle et humaine",
+  "parametres": {} ou null,
+  "next_step": "prochaine étape naturelle"
 }
 `;
 
@@ -1165,11 +943,11 @@ Utilisateur: "Paracetamol"
         messages: [
           {
             role: "system",
-            content: "Tu es une assistante médicale empathique et intelligente. Analyse le contexte et réponds naturellement en français. Réponds UNIQUEMENT en JSON."
+            content: "Tu es une assistante médicale naturelle. Réponds comme un humain, pas un robot. Réponds UNIQUEMENT en JSON."
           },
           { role: "user", content: prompt }
         ],
-        temperature: 0.4,
+        temperature: 0.7,
         max_tokens: 400,
         response_format: { type: "json_object" }
       },
@@ -1189,209 +967,99 @@ Utilisateur: "Paracetamol"
     await sendWhatsAppMessage(userId, result.reponse);
 
     // Mettre à jour l'état basé sur l'analyse
-    await executerActionIntelligente(userId, result, message, userState);
-
+    await executerActionNaturelle(userId, result, message, userState);
+    
     // Mettre à jour le contexte avec la réponse de l'assistant
     await gestionnaireContexte.mettreAJourContexte(userId, result.reponse, 'assistant');
-
+    
     return result;
 
   } catch (error) {
     console.error('❌ Erreur analyse intelligente:', error.message);
-    // Réponse de secours intelligente
-    await sendWhatsAppMessage(
-      userId,
-      "Je comprends que vous avez plusieurs questions. Laissez-moi vous aider :\n\n" +
-      "1. 💊 **Médicaments** - Dites-moi le nom exact\n" +
-      "2. 🏥 **Pharmacies de garde** - Je peux les rechercher\n" +
-      "3. 👨‍⚕️ **Cliniques** - Je connais celles à San Pedro\n" +
-      "4. 📅 **Rendez-vous** - Avec quel spécialiste ?\n\n" +
-      "Que souhaitez-vous faire ?"
-    );
+    // Réponse d'erreur naturelle
+    await sendWhatsAppMessage(userId, "Désolée, j'ai un petit problème technique. Réessaye de me parler.");
+  }
+}
 
-    // Réinitialiser l'état pour conversation normale
+// =================== EXÉCUTION NATURELLE DES ACTIONS ===================
+async function executerActionNaturelle(userId, result, messageOriginal, userState) {
+  const action = result.action;
+  const parametres = result.parametres || {};
+
+  console.log(`🤖 Exécution action naturelle: ${action}`);
+
+  // Actions qui nécessitent des opérations spécifiques
+  const actionLower = action.toLowerCase();
+  
+  if (actionLower.includes('pharmacie') && actionLower.includes('garde')) {
+    // Réinitialiser pour nouvelle requête
     userState.step = 'MENU_PRINCIPAL';
     userState.attenteMedicament = false;
     userState.attenteCommande = false;
     userStates.set(userId, userState);
-  }
-}
-
-// =================== EXÉCUTION INTELLIGENTE DES ACTIONS ===================
-async function executerActionIntelligente(userId, result, messageOriginal, userState) {
-  const action = result.action;
-  const parametres = result.parametres || {};
-
-  console.log(`🤖 Exécution action intelligente: ${action}`);
-
-  switch (action) {
-    case 'CHANGEMENT_SUJET':
-      // L'utilisateur change de sujet, on réinitialise l'état précédent
-      console.log(`🔄 Changement de sujet: ${parametres.ancien_sujet} → ${parametres.nouveau_sujet}`);
-
-      // Réinitialiser l'état lié à l'ancien sujet
-      if (parametres.ancien_sujet === 'médicaments') {
-        userState.attenteMedicament = false;
-        userState.attenteCommande = false;
-        userState.resultatsRechercheMedicaments = null;
-      }
-
-      // Traiter le nouveau sujet basé sur next_step
-      if (result.next_step === 'LISTE_CLINIQUES') {
-        await afficherListeCliniquesReelles(userId);
-      } else if (result.next_step === 'PHARMACIE_GARDE') {
-        await afficherPharmaciesDeGarde(userId);
-      } else if (result.next_step === 'RECHERCHE_MEDICAMENT') {
-        const nomMedicament = parametres.nom_medicament || extraireNomMedicament(messageOriginal);
-        if (nomMedicament) {
-          await rechercherEtAfficherMedicament(userId, nomMedicament);
-        }
-      }
-
-      userState.step = 'MENU_PRINCIPAL';
-      break;
-
-    case 'RECONNAISSANCE_SYMPTOME':
-      // L'utilisateur exprime un symptôme
-      console.log(`⚠️ Reconnaissance symptôme: ${JSON.stringify(parametres)}`);
-
-      if (parametres.symptome === 'mal de tête') {
-        userState.attenteMedicament = true; // Prêt à recevoir nom de médicament
-      }
-      break;
-
-    case 'CLARIFICATION':
-      // L'utilisateur semble confus ou répète
-      console.log(`❓ Clarification demandée`);
-
-      // Réinitialiser à un état clair
-      userState.step = 'MENU_PRINCIPAL';
-      userState.attenteMedicament = false;
-      userState.attenteCommande = false;
-
-      // Exécuter l'action suggérée
-      if (result.next_step === 'PHARMACIE_GARDE') {
-        await afficherPharmaciesDeGarde(userId);
-      } else if (result.next_step === 'LISTE_CLINIQUES') {
-        await afficherListeCliniquesReelles(userId);
-      }
-      break;
-
-    case 'RECHERCHE_MEDICAMENT':
-      // Rechercher le médicament demandé
-      const nomMedicament = parametres.nom_medicament || extraireNomMedicament(messageOriginal);
-      if (nomMedicament) {
-        await rechercherEtAfficherMedicament(userId, nomMedicament);
-      }
-      break;
-
-    case 'LISTE_CLINIQUES':
-      await afficherListeCliniquesReelles(userId);
-      break;
-
-    case 'PHARMACIE_GARDE':
-      await afficherPharmaciesDeGarde(userId);
-      break;
-
-    case 'DEMANDE_NOM_MEDICAMENT':
-      await sendWhatsAppMessage(userId, "Quel médicament souhaitez-vous acheter ? Veuillez préciser le nom exact.");
-      userState.attenteMedicament = true;
-      break;
-
-    case 'DEMANDE_RENDEZ_VOUS':
-      const specialite = parametres.specialite || extraireSpecialite(messageOriginal);
-      if (specialite) {
-        await chercherCliniquesParSpecialitePourRdv(userId, specialite);
-      } else {
-        userState.attenteSpecialiteRdv = true;
-      }
-      break;
-
-    default:
-      // Action par défaut
-      await executerActionBasique(userId, result, messageOriginal, userState);
-      break;
-  }
-
-  userStates.set(userId, userState);
-}
-
-async function executerActionBasique(userId, result, messageOriginal, userState) {
-  // Logique basique pour les actions non gérées spécifiquement
-  if (result.action === 'RECHERCHE_MEDICAMENT') {
-    const nomMedicament = result.parametres?.nom_medicament || extraireNomMedicament(messageOriginal);
+    
+    await afficherPharmaciesDeGarde(userId);
+    
+  } else if (actionLower.includes('recherche') || actionLower.includes('medicament')) {
+    const nomMedicament = parametres.nom_medicament || extraireNomMedicament(messageOriginal);
     if (nomMedicament) {
       await rechercherEtAfficherMedicament(userId, nomMedicament);
     }
-  } else if (result.action === 'PHARMACIE_GARDE') {
-    await afficherPharmaciesDeGarde(userId);
-  } else if (result.action === 'LISTE_CLINIQUES') {
+    
+  } else if (actionLower.includes('clinique') || actionLower.includes('liste')) {
+    userState.step = 'MENU_PRINCIPAL';
+    userStates.set(userId, userState);
     await afficherListeCliniquesReelles(userId);
-  } else if (result.action === 'DEMANDE_RENDEZ_VOUS') {
-    const specialite = result.parametres?.specialite || extraireSpecialite(messageOriginal);
+    
+  } else if (actionLower.includes('rendez-vous') || actionLower.includes('rdv')) {
+    const specialite = parametres.specialite || extraireSpecialite(messageOriginal);
     if (specialite) {
       await chercherCliniquesParSpecialitePourRdv(userId, specialite);
     } else {
       userState.attenteSpecialiteRdv = true;
       userStates.set(userId, userState);
     }
-  }
-}
-
-// =================== GESTION INTELLIGENTE DES MESSAGES ===================
-async function gererMessageIntelligent(userId, message) {
-  const userState = userStates.get(userId) || { ...DEFAULT_STATE };
-  const texte = message.toLowerCase().trim();
-
-  console.log(`🤖 Message intelligent: "${message}" (état: ${userState.step})`);
-
-  // 1. Vérifier d'abord les remerciements et suivi
-  const traiteRemerciement = await gererRemerciementsEtSuivi(userId, message, userState);
-  if (traiteRemerciement) {
-    return;
-  }
-
-  // 2. Détection de mots-clés critiques pour interruption
-  const motsInterruption = ['stop', 'annuler', 'recommencer', 'autre chose', 'changer', 'non'];
-
-  const estInterruption = motsInterruption.some(mot => texte.includes(mot));
-
-  if (estInterruption && userState.step !== 'MENU_PRINCIPAL') {
-    console.log(`🛑 Interruption demandée, réinitialisation`);
+    
+  } else if (actionLower.includes('commander') || actionLower.includes('acheter')) {
+    userState.attenteMedicament = true;
+    userStates.set(userId, userState);
+    
+  } else if (actionLower.includes('clarification') || actionLower.includes('confus')) {
     userState.step = 'MENU_PRINCIPAL';
     userState.attenteMedicament = false;
     userState.attenteCommande = false;
-    userState.panier = [];
-    await sendWhatsAppMessage(userId,
-      "✅ Parfait ! Recommençons. Comment puis-je vous aider ?\n\n" +
-      "💊 Médicaments | 🏥 Pharmacies | 👨‍⚕️ Cliniques | 📅 Rendez-vous"
-    );
     userStates.set(userId, userState);
-    return;
+    
+  } else if (actionLower.includes('remerciement') || actionLower.includes('gratitude')) {
+    // Réinitialiser complètement après remerciement
+    userState.apresCommande = false;
+    userState.apresRendezVous = false;
+    userState.step = 'MENU_PRINCIPAL';
+    userState.attenteMedicament = false;
+    userState.attenteCommande = false;
+    userState.attenteNom = false;
+    userState.attenteQuartier = false;
+    userState.attenteWhatsApp = false;
+    userState.attenteIndications = false;
+    userState.resultatsRechercheMedicaments = null;
+    userState.listeMedicamentsAvecIndex = [];
+    userStates.set(userId, userState);
   }
+  
+  // Pour toutes les autres actions, on laisse juste la réponse naturelle
+}
 
-  // 3. Vérifier si l'utilisateur répète la même demande
-  const derniersMessages = userState.historiqueMessages?.slice(-3) || [];
-  const repetitions = derniersMessages.filter(m =>
-    m.message.toLowerCase().includes(texte.substring(0, 10))).length;
+// =================== GESTION NATURELLE DES MESSAGES ===================
+async function gererMessageNaturel(userId, message) {
+  const userState = userStates.get(userId) || { ...DEFAULT_STATE };
+  const texte = message.toLowerCase().trim();
 
-  if (repetitions > 1) {
-    console.log(`🔄 Répétition détectée, clarification`);
-    await sendWhatsAppMessage(userId,
-      "Je vois que vous insistez sur ce point. Laissez-moi vous aider autrement.\n\n" +
-      "Souhaitez-vous :\n" +
-      "1. Voir à nouveau les options ?\n" +
-      "2. Parler à un conseiller ?\n" +
-      "3. Changer de sujet ?\n\n" +
-      "Dites simplement ce que vous préférez."
-    );
-    return;
-  }
+  console.log(`💬 Message naturel: "${message}"`);
 
-  // 4. Utiliser le cerveau Groq pour analyse contextuelle
+  // TOUT PASSE PAR LE CERVEAU GROQ POUR UNE CONVERSATION NATURELLE
   await comprendreEtAgir(userId, message);
 
-  // 5. Mettre à jour l'historique
+  // Mettre à jour l'historique
   if (!userState.historiqueMessages) {
     userState.historiqueMessages = [];
   }
@@ -1431,7 +1099,7 @@ function extraireNomMedicament(message) {
   // Extraction par regex pour les noms génériques
   const regexMedicament = /\b(?:paracétamol|ibuprofène|amoxicilline|aspirine|doliprane|advil)\b/i;
   const match = texte.match(regexMedicament);
-
+  
   return match ? match[0].toLowerCase() : null;
 }
 
@@ -1465,7 +1133,7 @@ function extraireSpecialite(message) {
 // =================== GESTION DES MÉDICAMENTS ===================
 async function rechercherEtAfficherMedicament(userId, nomMedicament) {
   try {
-    await sendWhatsAppMessage(userId, `🔍 Recherche "${nomMedicament}"...`);
+    await sendWhatsAppMessage(userId, `Je cherche "${nomMedicament}"...`);
 
     const termeRecherche = nomMedicament.toLowerCase().trim();
 
@@ -1495,8 +1163,8 @@ async function rechercherEtAfficherMedicament(userId, nomMedicament) {
     if (medicamentsFiltres.length === 0) {
       await sendWhatsAppMessage(
         userId,
-        `❌ "${nomMedicament}" non disponible.\n\n` +
-        `📞 Contactez le support :\n` +
+        `Je ne trouve pas "${nomMedicament}" en stock.\n\n` +
+        `📞 Contacte le support :\n` +
         `${CONFIG.SUPPORT_PHONE}`
       );
       return;
@@ -1552,12 +1220,12 @@ async function rechercherEtAfficherMedicament(userId, nomMedicament) {
 
     const userStateCurrent = userStates.get(userId) || DEFAULT_STATE;
     if (userStateCurrent.panier && userStateCurrent.panier.length > 0) {
-      message += `Votre panier contient ${userStateCurrent.panier.length} médicament(s).\n`;
+      message += `Ton panier a ${userStateCurrent.panier.length} médicament(s).\n`;
       message += `• "continuer" pour ajouter un autre\n`;
       message += `• "terminer" pour finaliser\n`;
-      message += `• "panier" pour voir votre panier\n`;
+      message += `• "panier" pour voir ton panier\n`;
     } else {
-      message += `Après ajout, dites "continuer" ou "terminer".\n`;
+      message += `Après ajout, dis "continuer" ou "terminer".\n`;
     }
 
     await sendWhatsAppMessage(userId, message);
@@ -1573,14 +1241,27 @@ async function rechercherEtAfficherMedicament(userId, nomMedicament) {
     console.error('❌ Erreur recherche:', error.message);
     await sendWhatsAppMessage(
       userId,
-      `❌ Erreur recherche "${nomMedicament}".\n\n` +
-      `📞 Contactez le support : ${CONFIG.SUPPORT_PHONE}`
+      `Problème pour chercher "${nomMedicament}".\n\n` +
+      `📞 Contacte le support : ${CONFIG.SUPPORT_PHONE}`
     );
   }
 }
 
 async function traiterCommandeMedicament(userId, message, userState) {
   const texte = message.toLowerCase().trim();
+
+  // Détection de changement de sujet
+  const changementSujetMots = ['pharmacie', 'clinique', 'rendez-vous', 'garde', 'disponible', '?', 'quoi', 'comment'];
+  const estChangementSujet = changementSujetMots.some(mot => texte.includes(mot));
+  
+  if (estChangementSujet) {
+    // Réinitialiser et laisser Groq traiter
+    userState.attenteCommande = false;
+    userState.step = 'MENU_PRINCIPAL';
+    userStates.set(userId, userState);
+    await gererMessageNaturel(userId, message);
+    return;
+  }
 
   // Ajouter au panier
   const ajouterRegex = /ajouter\s+(\d+)(?:\s+(\d+))?/i;
@@ -1599,7 +1280,7 @@ async function traiterCommandeMedicament(userId, message, userState) {
     const medicamentInfo = userState.listeMedicamentsAvecIndex.find(m => m.index === numero);
 
     if (!medicamentInfo) {
-      await sendWhatsAppMessage(userId, "Numéro invalide. Choisissez un numéro de la liste.");
+      await sendWhatsAppMessage(userId, "Numéro invalide. Choisis un numéro de la liste.");
       return;
     }
 
@@ -1607,8 +1288,8 @@ async function traiterCommandeMedicament(userId, message, userState) {
     if (medicamentInfo.medicament.stock < quantite) {
       await sendWhatsAppMessage(
         userId,
-        `❌ Stock insuffisant. Il ne reste que ${medicamentInfo.medicament.stock} disponible(s).\n\n` +
-        `📞 Contactez le support : ${CONFIG.SUPPORT_PHONE}`
+        `Stock insuffisant. Il reste ${medicamentInfo.medicament.stock} disponible(s).\n\n` +
+        `📞 Contacte le support : ${CONFIG.SUPPORT_PHONE}`
       );
       return;
     }
@@ -1617,8 +1298,8 @@ async function traiterCommandeMedicament(userId, message, userState) {
     if (medicamentInfo.medicament.necessiteOrdonnance) {
       await sendWhatsAppMessage(
         userId,
-        `📄 Ce médicament nécessite une ordonnance.\n\n` +
-        `Envoyez la photo de votre ordonnance au support client via WhatsApp pour que votre commande soit prise en charge.\n\n` +
+        `Ce médicament nécessite une ordonnance.\n\n` +
+        `Envoie la photo de ton ordonnance au support pour continuer.\n\n` +
         `📞 Support : ${CONFIG.SUPPORT_PHONE}`
       );
       return;
@@ -1652,9 +1333,9 @@ async function traiterCommandeMedicament(userId, message, userState) {
     if (resultatPanier === null) {
       await sendWhatsAppMessage(
         userId,
-        "🛒 Pour commander :\n" +
-        'Écrivez "ajouter [numéro] [quantité]"\n\n' +
-        "📝 Exemple :\n" +
+        "Pour commander :\n" +
+        '"ajouter [numéro] [quantité]"\n\n' +
+        'Exemple :\n' +
         '"ajouter 1 1" pour ajouter 1 du médicament n°1'
       );
     }
@@ -1664,8 +1345,20 @@ async function traiterCommandeMedicament(userId, message, userState) {
 // =================== GESTION DES PHARMACIES ===================
 async function afficherPharmaciesDeGarde(userId) {
   try {
-    await sendWhatsAppMessage(userId, "🔍 Recherche des pharmacies de garde...");
+    const userState = userStates.get(userId) || DEFAULT_STATE;
+    
+    // Réinitialiser l'état
+    userState.step = 'MENU_PRINCIPAL';
+    userState.attenteMedicament = false;
+    userState.attenteCommande = false;
+    userStates.set(userId, userState);
+    
+    await sendWhatsAppMessage(userId, "Je cherche les pharmacies de garde...");
 
+    const maintenant = new Date();
+    const heure = maintenant.getHours();
+    const estNuit = heure >= 22 || heure < 6;
+    
     const snapshot = await db.collection('pharmacies')
       .where('estDeGarde', '==', true)
       .where('estOuvert', '==', true)
@@ -1675,35 +1368,37 @@ async function afficherPharmaciesDeGarde(userId) {
     if (snapshot.empty) {
       await sendWhatsAppMessage(
         userId,
-        "❌ Aucune pharmacie de garde trouvée pour le moment.\n\n" +
-        "📞 Contactez le support au " + CONFIG.SUPPORT_PHONE + "\n\n" +
-        "📍 Service uniquement à San Pedro"
+        "Aucune pharmacie de garde trouvée pour le moment.\n\n" +
+        (estNuit ? "Il est tard, les pharmacies de nuit sont limitées.\n\n" : "") +
+        `📞 Support : ${CONFIG.SUPPORT_PHONE}\n\n` +
+        "Tu peux aussi commander des médicaments en ligne."
       );
       return;
     }
 
-    let message = "🏥 Pharmacies de garde - San Pedro\n\n";
+    let message = `🏥 Pharmacies de garde - San Pedro\n`;
+    if (estNuit) message += "🌙 Service de nuit\n\n";
 
     snapshot.docs.forEach((doc, index) => {
       const pharmacie = doc.data();
       message += `${index + 1}. ${pharmacie.nom || 'Pharmacie'}\n`;
-      message += `   ${pharmacie.adresse || 'San Pedro'}\n`;
+      message += `   📍 ${pharmacie.adresse || 'San Pedro'}\n`;
       message += `   📞 ${pharmacie.telephone || 'Non disponible'}\n`;
       message += `   ⏰ ${pharmacie.horaires || '24h/24'}\n\n`;
     });
 
-    message += "💊 Pour commander des médicaments :\n";
-    message += "Écrivez simplement le nom du médicament\n\n";
-    message += "📞 Support : " + CONFIG.SUPPORT_PHONE;
+    message += "💡 Présente ton ordonnance si besoin.\n";
+    message += "💊 Tu peux aussi commander en ligne.\n\n";
+    message += `📞 Support : ${CONFIG.SUPPORT_PHONE}`;
 
     await sendWhatsAppMessage(userId, message);
 
   } catch (error) {
-    console.error('❌ Erreur pharmacies:', error.message);
+    console.error('❌ Erreur pharmacies de garde:', error.message);
     await sendWhatsAppMessage(
       userId,
-      "❌ Erreur recherche pharmacies.\n\n" +
-      "📞 Contactez le support : " + CONFIG.SUPPORT_PHONE
+      "Problème pour accéder à la liste des pharmacies.\n\n" +
+      `📞 Contacte le support : ${CONFIG.SUPPORT_PHONE}`
     );
   }
 }
@@ -1719,7 +1414,7 @@ async function gererPriseRendezVous(userId, message) {
   if (texte.includes('rendez-vous') || texte.includes('rdv') || texte.includes('consultation')) {
     userState.attenteSpecialiteRdv = true;
     userStates.set(userId, userState);
-    await sendWhatsAppMessage(userId, "Avec quel type de médecin souhaitez-vous consulter ?");
+    await sendWhatsAppMessage(userId, "Avec quel type de médecin tu veux consulter ?");
     return;
   }
 
@@ -1748,12 +1443,11 @@ async function gererPriseRendezVous(userId, message) {
 
       await sendWhatsAppMessage(
         userId,
-        `🏥 ${clinique.nom}\n\n` +
-        `✅ Clinique sélectionnée\n\n` +
+        `${clinique.nom}\n\n` +
+        `✅ Sélectionnée\n\n` +
         `${clinique.adresse || 'San Pedro'}\n` +
         `${clinique.telephone || ''}\n\n` +
-        `📅 Quelle date souhaitez-vous ?\n` +
-        `Format : JJ/MM/AAAA`
+        `Quelle date ? (JJ/MM/AAAA)`
       );
       return;
     }
@@ -1768,9 +1462,8 @@ async function gererPriseRendezVous(userId, message) {
 
     await sendWhatsAppMessage(
       userId,
-      `📅 Date : ${texte}\n\n` +
-      "⏰ À quelle heure ?\n" +
-      "Format : HH:MM"
+      `Date : ${texte}\n\n` +
+      "À quelle heure ? (HH:MM)"
     );
     return;
   }
@@ -1784,8 +1477,8 @@ async function gererPriseRendezVous(userId, message) {
 
     await sendWhatsAppMessage(
       userId,
-      `⏰ Heure : ${texte}\n\n` +
-      "👤 Quel est votre nom complet ?"
+      `Heure : ${texte}\n\n` +
+      "Ton nom complet ?"
     );
     return;
   }
@@ -1799,9 +1492,8 @@ async function gererPriseRendezVous(userId, message) {
 
     await sendWhatsAppMessage(
       userId,
-      `👤 Nom : ${texte}\n\n` +
-      "📱 Quel est votre numéro de téléphone ?\n" +
-      "Format : 07XXXXXXXX"
+      `Nom : ${texte}\n\n` +
+      "Ton numéro de téléphone ? (07XXXXXXXX)"
     );
     return;
   }
@@ -1817,7 +1509,7 @@ async function chercherCliniquesParSpecialitePourRdv(userId, specialite) {
   try {
     const userState = userStates.get(userId) || DEFAULT_STATE;
 
-    await sendWhatsAppMessage(userId, `🔍 Recherche des cliniques pour "${specialite}"...`);
+    await sendWhatsAppMessage(userId, `Je cherche des cliniques pour "${specialite}"...`);
 
     const snapshot = await db.collection('centres_sante')
       .where('estVerifie', '==', true)
@@ -1866,15 +1558,14 @@ async function chercherCliniquesParSpecialitePourRdv(userId, specialite) {
       // Obtenir les spécialités réelles
       const specialitesReelles = await obtenirSpecialitesReelles();
 
-      let messageErreur = `🔍 Recherche : "${specialite}"\n\n`;
-      messageErreur += `❌ Aucun médecin ou clinique trouvé pour cette spécialité.\n\n`;
+      let messageErreur = `Je ne trouve pas de "${specialite}"\n\n`;
 
       if (specialitesReelles) {
-        messageErreur += `🏥 Spécialités disponibles :\n`;
+        messageErreur += `Spécialités disponibles :\n`;
         messageErreur += specialitesReelles + `\n\n`;
       }
 
-      messageErreur += `📞 Contactez le support : ${CONFIG.SUPPORT_PHONE}`;
+      messageErreur += `📞 Support : ${CONFIG.SUPPORT_PHONE}`;
 
       await sendWhatsAppMessage(userId, messageErreur);
 
@@ -1914,9 +1605,9 @@ async function chercherCliniquesParSpecialitePourRdv(userId, specialite) {
       message += `\n`;
     });
 
-    message += `✅ Pour choisir :\n`;
-    message += `Répondez avec le numéro de la clinique\n\n`;
-    message += `📝 Exemple : "1" pour la première clinique`;
+    message += `Pour choisir :\n`;
+    message += `Réponds avec le numéro de la clinique\n`;
+    message += `Exemple : "1" pour la première`;
 
     await sendWhatsAppMessage(userId, message);
 
@@ -1924,8 +1615,8 @@ async function chercherCliniquesParSpecialitePourRdv(userId, specialite) {
     console.error('❌ Erreur recherche cliniques:', error.message);
     await sendWhatsAppMessage(
       userId,
-      `❌ Erreur lors de la recherche.\n\n` +
-      `📞 Contactez le support : ${CONFIG.SUPPORT_PHONE}`
+      `Problème lors de la recherche.\n\n` +
+      `📞 Support : ${CONFIG.SUPPORT_PHONE}`
     );
   }
 }
@@ -1943,11 +1634,10 @@ async function obtenirSpecialitesReelles() {
 
     const specialitesUniques = new Set();
 
-    // Collecter toutes les spécialités de toutes les cliniques
+    // Collecter toutes les spécialités
     for (const doc of snapshot.docs) {
       const centre = doc.data();
 
-      // Spécialités du centre
       if (centre.specialites && Array.isArray(centre.specialites)) {
         centre.specialites.forEach(spec => {
           if (spec && typeof spec === 'string' && spec.trim().length > 0) {
@@ -1956,7 +1646,6 @@ async function obtenirSpecialitesReelles() {
         });
       }
 
-      // Services du centre
       if (centre.services && Array.isArray(centre.services)) {
         centre.services.forEach(service => {
           if (service && typeof service === 'string' && service.trim().length > 0) {
@@ -1972,7 +1661,6 @@ async function obtenirSpecialitesReelles() {
       return null;
     }
 
-    // Limiter et formater
     return specialitesListe
       .slice(0, 10)
       .map(spec => `• ${spec}`)
@@ -1995,7 +1683,7 @@ async function finaliserRendezVous(userId, telephone, userState) {
     } = userState;
 
     if (!cliniqueSelectionneeRdv) {
-      await sendWhatsAppMessage(userId, "❌ Aucune clinique sélectionnée.");
+      await sendWhatsAppMessage(userId, "Aucune clinique sélectionnée.");
       return;
     }
 
@@ -2025,29 +1713,24 @@ async function finaliserRendezVous(userId, telephone, userState) {
     await sendWhatsAppMessage(
       userId,
       `✅ Rendez-vous pris\n\n` +
-      `👤 Patient : ${nomRdv}\n` +
-      `📱 Téléphone : ${telephone}\n` +
-      `🏥 Clinique : ${cliniqueSelectionneeRdv.nom}\n` +
-      `📍 Adresse : ${cliniqueSelectionneeRdv.adresse || 'San Pedro'}\n` +
-      `🩺 Spécialité : ${specialiteRdv}\n` +
-      `📅 Date : ${dateRdv}\n` +
-      `⏰ Heure : ${heureRdv}\n` +
-      `📊 Statut : En attente de confirmation\n\n` +
-      `La clinique vous contactera pour confirmation.\n\n` +
-      `📱 **Pour suivre votre rendez-vous :**\n` +
-      `• Dites "suivi rdv" ou "statut rendez-vous"\n` +
-      `• Dites "merci" pour confirmer\n` +
-      `• Dites "autre" pour une nouvelle demande\n\n` +
-      `📞 **Support & suivi :**\n` +
-      `${CONFIG.SUPPORT_PHONE}\n` +
-      `🔢 **Référence :** ${rdvReference}`
+      `👤 ${nomRdv}\n` +
+      `📱 ${telephone}\n` +
+      `🏥 ${cliniqueSelectionneeRdv.nom}\n` +
+      `📍 ${cliniqueSelectionneeRdv.adresse || 'San Pedro'}\n` +
+      `🩺 ${specialiteRdv}\n` +
+      `📅 ${dateRdv}\n` +
+      `⏰ ${heureRdv}\n\n` +
+      `La clinique te contactera pour confirmer.\n\n` +
+      `Pour suivre ton rendez-vous, dis "suivi rdv".\n\n` +
+      `Référence : ${rdvReference}\n` +
+      `📞 Support : ${CONFIG.SUPPORT_PHONE}`
     );
 
     // Enregistrer l'état "après rendez-vous"
     userState.apresRendezVous = true;
     userState.dernierRdvRef = rdvReference;
 
-    // Réinitialiser les autres états
+    // Réinitialiser
     userState.attenteTelephoneRdv = false;
     userState.specialiteRdv = null;
     userState.cliniqueSelectionneeRdv = null;
@@ -2062,8 +1745,8 @@ async function finaliserRendezVous(userId, telephone, userState) {
     console.error('❌ Erreur rendez-vous:', error.message);
     await sendWhatsAppMessage(
       userId,
-      "❌ Erreur lors de la prise de rendez-vous.\n" +
-      "📞 Contactez le support : " + CONFIG.SUPPORT_PHONE
+      "Problème pour prendre le rendez-vous.\n" +
+      `📞 Support : ${CONFIG.SUPPORT_PHONE}`
     );
   }
 }
@@ -2116,7 +1799,7 @@ function genererServiceId(specialite) {
 // =================== LISTE DES CLINIQUES ===================
 async function afficherListeCliniquesReelles(userId) {
   try {
-    await sendWhatsAppMessage(userId, "🔍 Recherche des cliniques à San Pedro...");
+    await sendWhatsAppMessage(userId, "Je cherche les cliniques à San Pedro...");
 
     const snapshot = await db.collection('centres_sante')
       .where('estVerifie', '==', true)
@@ -2126,9 +1809,9 @@ async function afficherListeCliniquesReelles(userId) {
     if (snapshot.empty) {
       await sendWhatsAppMessage(
         userId,
-        "❌ Aucune clinique trouvée pour le moment.\n\n" +
-        "📞 Contactez le support : " + CONFIG.SUPPORT_PHONE + "\n\n" +
-        "📍 Service uniquement à San Pedro"
+        "Aucune clinique trouvée pour le moment.\n\n" +
+        `📞 Support : ${CONFIG.SUPPORT_PHONE}\n\n` +
+        "Service uniquement à San Pedro"
       );
       return;
     }
@@ -2161,9 +1844,9 @@ async function afficherListeCliniquesReelles(userId) {
       message += `\n`;
     });
 
-    message += "📅 Pour prendre rendez-vous :\n";
-    message += 'Dites "rendez-vous [spécialité]"\n\n';
-    message += "📞 Support : " + CONFIG.SUPPORT_PHONE;
+    message += "Pour prendre rendez-vous :\n";
+    message += 'Dis "rendez-vous [spécialité]"\n\n';
+    message += `📞 Support : ${CONFIG.SUPPORT_PHONE}`;
 
     await sendWhatsAppMessage(userId, message);
 
@@ -2171,9 +1854,9 @@ async function afficherListeCliniquesReelles(userId) {
     console.error('❌ Erreur liste cliniques:', error.message);
     await sendWhatsAppMessage(
       userId,
-      "❌ Erreur lors de la recherche.\n\n" +
-      "📞 Contactez le support : " + CONFIG.SUPPORT_PHONE + "\n\n" +
-      "📍 Service uniquement à San Pedro"
+      "Problème lors de la recherche.\n\n" +
+      `📞 Support : ${CONFIG.SUPPORT_PHONE}\n\n` +
+      "Service uniquement à San Pedro"
     );
   }
 }
@@ -2181,17 +1864,15 @@ async function afficherListeCliniquesReelles(userId) {
 // =================== RECHERCHE PAR IMAGE ===================
 async function traiterRechercheParImage(userId, mediaId, userState) {
   try {
-    await sendWhatsAppMessage(userId, "📸 Image reçue.");
+    await sendWhatsAppMessage(userId, "Photo reçue.");
 
     await sendWhatsAppMessage(
       userId,
-      "🔍 Pour rechercher un médicament par photo :\n\n" +
-      "Écrivez le nom du médicament que vous voyez sur l'image.\n\n" +
-      "📝 Exemples :\n" +
+      "Écris le nom du médicament sur la photo.\n\n" +
+      "Exemples :\n" +
       "• Paracétamol\n" +
-      "• Doliprane 1000mg\n" +
-      "• Ibuprofène\n" +
-      "• Amoxicilline"
+      "• Doliprane\n" +
+      "• Ibuprofène"
     );
 
     userState.attenteMedicamentImage = true;
@@ -2199,22 +1880,21 @@ async function traiterRechercheParImage(userId, mediaId, userState) {
 
   } catch (error) {
     console.error('❌ Erreur image:', error.message);
-    await sendWhatsAppMessage(userId, "❌ Erreur d'analyse. Écrivez le nom du médicament.");
+    await sendWhatsAppMessage(userId, "Problème d'analyse. Écris le nom du médicament.");
   }
 }
 
 async function traiterImageOrdonnance(userId, userState) {
   await sendWhatsAppMessage(
     userId,
-    "📄 Ordonnance reçue\n\n" +
-    "Votre ordonnance a été envoyée pour validation.\n\n" +
-    "Pour finaliser :\n" +
-    "Envoyez maintenant vos informations une par une :\n\n" +
-    "1. **Nom complet**\n" +
-    "2. **Quartier**\n" +
-    "3. **Numéro WhatsApp**\n" +
+    "Ordonnance reçue\n\n" +
+    "Ton ordonnance a été envoyée pour validation.\n\n" +
+    "Maintenant envoie tes infos :\n\n" +
+    "1. **Ton nom complet**\n" +
+    "2. **Ton quartier**\n" +
+    "3. **Ton numéro WhatsApp**\n" +
     "4. **Indications pour la livraison**\n\n" +
-    "Commencez par votre nom :"
+    "Commence par ton nom :"
   );
 
   userState.attentePhotoOrdonnance = false;
@@ -2225,7 +1905,7 @@ async function traiterImageOrdonnance(userId, userState) {
 
 // =================== TRAITEMENT INFORMATIONS DE LIVRAISON ===================
 async function collecterInfosLivraison(userId, message, userState) {
-  console.log(`📦 Collecte infos livraison: "${message}"`);
+  console.log(`📦 Collecte infos: "${message}"`);
 
   // Étape 1: Collecte du nom
   if (userState.step === 'ATTENTE_NOM' || userState.attenteNom) {
@@ -2237,8 +1917,8 @@ async function collecterInfosLivraison(userId, message, userState) {
 
     await sendWhatsAppMessage(
       userId,
-      `👤 Nom : ${userState.nom}\n\n` +
-      `Maintenant, quel est votre quartier à San Pedro ?`
+      `Nom : ${userState.nom}\n\n` +
+      `Ton quartier à San Pedro ?`
     );
     return;
   }
@@ -2253,9 +1933,8 @@ async function collecterInfosLivraison(userId, message, userState) {
 
     await sendWhatsAppMessage(
       userId,
-      `📍 Quartier : ${userState.quartier}\n\n` +
-      `Maintenant, quel est votre numéro WhatsApp ?\n` +
-      `Format : 07XXXXXXXX`
+      `Quartier : ${userState.quartier}\n\n` +
+      `Ton numéro WhatsApp ? (07XXXXXXXX)`
     );
     return;
   }
@@ -2269,8 +1948,8 @@ async function collecterInfosLivraison(userId, message, userState) {
     if (!regexWhatsApp.test(numero)) {
       await sendWhatsAppMessage(
         userId,
-        `❌ Format de numéro invalide.\n\n` +
-        `Veuillez entrer un numéro valide au format 07XXXXXXXX\n` +
+        `Format de numéro invalide.\n\n` +
+        `Entre un numéro valide : 07XXXXXXXX\n` +
         `Exemple : 0709548989`
       );
       return;
@@ -2284,10 +1963,10 @@ async function collecterInfosLivraison(userId, message, userState) {
 
     await sendWhatsAppMessage(
       userId,
-      `📱 WhatsApp : ${userState.whatsapp}\n\n` +
-      `Enfin, des indications pour la livraison ?\n` +
-      `(Exemple : "vers le marché", "près de l'église", "maison bleue", etc.)\n\n` +
-      `Si aucune indication spéciale, répondez "aucune"`
+      `WhatsApp : ${userState.whatsapp}\n\n` +
+      `Indications pour la livraison ?\n` +
+      `Exemple : "vers le marché", "maison bleue"\n\n` +
+      `Si aucune, réponds "aucune"`
     );
     return;
   }
@@ -2306,7 +1985,7 @@ async function collecterInfosLivraison(userId, message, userState) {
 }
 
 async function collecterInfosLivraisonMulti(userId, message, userState) {
-  console.log(`📦 Collecte infos livraison multi: "${message}"`);
+  console.log(`📦 Collecte infos multi: "${message}"`);
 
   // Étape 1: Collecte du nom
   if (userState.step === 'ATTENTE_NOM_MULTI' || userState.attenteNom) {
@@ -2318,8 +1997,8 @@ async function collecterInfosLivraisonMulti(userId, message, userState) {
 
     await sendWhatsAppMessage(
       userId,
-      `👤 Nom : ${userState.nom}\n\n` +
-      `Maintenant, quel est votre quartier à San Pedro ?`
+      `Nom : ${userState.nom}\n\n` +
+      `Ton quartier à San Pedro ?`
     );
     return;
   }
@@ -2334,9 +2013,8 @@ async function collecterInfosLivraisonMulti(userId, message, userState) {
 
     await sendWhatsAppMessage(
       userId,
-      `📍 Quartier : ${userState.quartier}\n\n` +
-      `Maintenant, quel est votre numéro WhatsApp ?\n` +
-      `Format : 07XXXXXXXX`
+      `Quartier : ${userState.quartier}\n\n` +
+      `Ton numéro WhatsApp ? (07XXXXXXXX)`
     );
     return;
   }
@@ -2350,8 +2028,8 @@ async function collecterInfosLivraisonMulti(userId, message, userState) {
     if (!regexWhatsApp.test(numero)) {
       await sendWhatsAppMessage(
         userId,
-        `❌ Format de numéro invalide.\n\n` +
-        `Veuillez entrer un numéro valide au format 07XXXXXXXX\n` +
+        `Format de numéro invalide.\n\n` +
+        `Entre un numéro valide : 07XXXXXXXX\n` +
         `Exemple : 0709548989`
       );
       return;
@@ -2365,10 +2043,10 @@ async function collecterInfosLivraisonMulti(userId, message, userState) {
 
     await sendWhatsAppMessage(
       userId,
-      `📱 WhatsApp : ${userState.whatsapp}\n\n` +
-      `Enfin, des indications pour la livraison ?\n` +
-      `(Exemple : "vers le marché", "près de l'église", "maison bleue", etc.)\n\n` +
-      `Si aucune indication spéciale, répondez "aucune"`
+      `WhatsApp : ${userState.whatsapp}\n\n` +
+      `Indications pour la livraison ?\n` +
+      `Exemple : "vers le marché", "maison bleue"\n\n` +
+      `Si aucune, réponds "aucune"`
     );
     return;
   }
@@ -2392,12 +2070,8 @@ async function confirmerInfosLivraison(userId, userState) {
 
   await sendWhatsAppMessage(
     userId,
-    `✅ Informations confirmées\n\n` +
-    `👤 **Nom :** ${userState.nom}\n` +
-    `📍 **Quartier :** ${userState.quartier}\n` +
-    `📱 **WhatsApp :** ${userState.whatsapp}\n` +
-    (userState.indications ? `🗺️ **Indications :** ${userState.indications}\n\n` : `\n`) +
-    `Votre commande est en cours de traitement...`
+    `✅ Infos confirmées\n\n` +
+    `Ton commande est en traitement...`
   );
 
   // Créer la commande dans Firestore
@@ -2406,7 +2080,7 @@ async function confirmerInfosLivraison(userId, userState) {
   // Assigner un livreur
   const livreurInfo = await assignerLivreur(userId, userState.quartier);
 
-  // Envoyer confirmation finale avec infos livreur
+  // Envoyer confirmation finale
   await sendConfirmationFinale(userId, userState, commande, numeroCommande, livreurInfo);
 
   // Réinitialiser l'état utilisateur
@@ -2420,12 +2094,8 @@ async function confirmerInfosLivraisonMulti(userId, userState) {
 
   await sendWhatsAppMessage(
     userId,
-    `✅ Informations confirmées\n\n` +
-    `👤 **Nom :** ${userState.nom}\n` +
-    `📍 **Quartier :** ${userState.quartier}\n` +
-    `📱 **WhatsApp :** ${userState.whatsapp}\n` +
-    (userState.indications ? `🗺️ **Indications :** ${userState.indications}\n\n` : `\n`) +
-    `Votre commande multi-médicaments est en cours de traitement...`
+    `✅ Infos confirmées\n\n` +
+    `Ta commande de ${panier.length} médicament(s) est en traitement...`
   );
 
   // Créer la commande dans Firestore
@@ -2434,7 +2104,7 @@ async function confirmerInfosLivraisonMulti(userId, userState) {
   // Assigner un livreur
   const livreurInfo = await assignerLivreur(userId, userState.quartier);
 
-  // Envoyer confirmation finale avec infos livreur
+  // Envoyer confirmation finale
   await sendConfirmationFinaleMulti(userId, userState, commande, numeroCommande, livreurInfo);
 
   // Réinitialiser l'état utilisateur
@@ -2553,46 +2223,38 @@ async function assignerLivreur(userId, quartier) {
 }
 
 async function sendConfirmationFinale(userId, userState, commande, numeroCommande, livreurInfo) {
-  let message = `✅ Commande confirmée #${numeroCommande}\n\n`;
+  let message = `✅ Commande #${numeroCommande}\n\n`;
 
-  message += `👤 **Client :** ${userState.nom}\n`;
-  message += `📍 **Quartier :** ${userState.quartier}\n`;
-  message += `📱 **WhatsApp :** ${userState.whatsapp}\n`;
-  if (userState.indications) message += `🗺️ **Indications :** ${userState.indications}\n\n`;
-
-  message += `🛒 **Commande :**\n`;
   message += `${commande.medicamentNom} × ${commande.quantite}\n`;
-  message += `🏥 **Pharmacie :** ${commande.pharmacieNom}\n`;
-  message += `💰 **Total médicaments :** ${commande.prixTotal} FCFA\n`;
-  message += `🚚 **Livraison :** ${commande.fraisLivraison} FCFA\n`;
-  message += `💵 **TOTAL À PAYER :** ${commande.total} FCFA\n\n`;
+  message += `🏥 ${commande.pharmacieNom}\n`;
+  message += `💰 Médicaments : ${commande.prixTotal} FCFA\n`;
+  message += `🚚 Livraison : ${commande.fraisLivraison} FCFA\n`;
+  message += `💵 TOTAL : ${commande.total} FCFA\n\n`;
 
   if (livreurInfo) {
-    message += `🚴 **LIVREUR ASSIGNÉ :**\n`;
-    message += `👤 ${livreurInfo.nom}\n`;
+    message += `Livreur : ${livreurInfo.nom}\n`;
     message += `📱 ${livreurInfo.telephone}\n\n`;
-    message += `📞 Votre livreur vous contactera pour confirmation.\n\n`;
+    message += `Il te contactera pour confirmation.\n\n`;
   }
 
-  message += `📋 **Processus :**\n`;
-  message += `1. ✅ Commande envoyée à la pharmacie\n`;
-  message += `2. 📦 Préparation en cours\n`;
-  message += `3. 🚴 Livreur en route vers la pharmacie\n`;
-  message += `4. 🏠 Livraison à votre adresse\n\n`;
+  message += `Processus :\n`;
+  message += `✅ Commande envoyée\n`;
+  message += `📦 Préparation en cours\n`;
+  message += `🚴 Livreur en route\n`;
+  message += `🏠 Livraison à domicile\n\n`;
 
-  message += `⏰ **Délai estimé :** 45-60 minutes\n\n`;
-
-  message += `📱 **Pour suivre votre commande :**\n`;
-  message += `• Dites "suivi" ou "où en est ma commande ?"\n`;
-  message += `• Dites "merci" pour confirmer\n`;
-  message += `• Dites "autre" pour une nouvelle demande\n\n`;
-
-  message += `📞 **Support & suivi :**\n`;
-  message += `${CONFIG.SUPPORT_PHONE}\n`;
-  message += `🔢 **Référence :** ${numeroCommande}`;
+  message += `Délai estimé : 45-60 minutes\n\n`;
+  
+  message += `Pour suivre ta commande :\n`;
+  message += `• Dis "suivi"\n`;
+  message += `• Dis "merci" pour confirmer\n`;
+  message += `• Dis "autre" pour autre chose\n\n`;
+  
+  message += `📞 Support : ${CONFIG.SUPPORT_PHONE}\n`;
+  message += `Référence : ${numeroCommande}`;
 
   await sendWhatsAppMessage(userId, message);
-
+  
   // Enregistrer l'état "après commande"
   userState.apresCommande = true;
   userState.derniereCommandeRef = numeroCommande;
@@ -2606,14 +2268,9 @@ async function sendConfirmationFinale(userId, userState, commande, numeroCommand
 async function sendConfirmationFinaleMulti(userId, userState, commande, numeroCommande, livreurInfo) {
   const panier = commande.panier || [];
 
-  let message = `✅ Commande confirmée #${numeroCommande}\n\n`;
+  let message = `✅ Commande #${numeroCommande}\n\n`;
 
-  message += `👤 **Client :** ${userState.nom}\n`;
-  message += `📍 **Quartier :** ${userState.quartier}\n`;
-  message += `📱 **WhatsApp :** ${userState.whatsapp}\n`;
-  if (userState.indications) message += `🗺️ **Indications :** ${userState.indications}\n\n`;
-
-  message += `🛒 **Votre commande (${panier.length} médicament(s)) :**\n\n`;
+  message += `Médicaments (${panier.length}) :\n\n`;
   panier.forEach((item, index) => {
     message += `${index + 1}. ${item.medicamentNom} × ${item.quantite}\n`;
     const totalItem = item.prixUnitaire * item.quantite;
@@ -2622,36 +2279,34 @@ async function sendConfirmationFinaleMulti(userId, userState, commande, numeroCo
     message += `\n`;
   });
 
-  message += `💰 **Sous-total :** ${commande.sousTotal} FCFA\n`;
-  message += `🚚 **Livraison :** ${commande.fraisLivraison} FCFA\n`;
-  message += `💵 **TOTAL À PAYER :** ${commande.total} FCFA\n\n`;
+  message += `💰 Sous-total : ${commande.sousTotal} FCFA\n`;
+  message += `🚚 Livraison : ${commande.fraisLivraison} FCFA\n`;
+  message += `💵 TOTAL : ${commande.total} FCFA\n\n`;
 
   if (livreurInfo) {
-    message += `🚴 **LIVREUR ASSIGNÉ :**\n`;
-    message += `👤 ${livreurInfo.nom}\n`;
+    message += `Livreur : ${livreurInfo.nom}\n`;
     message += `📱 ${livreurInfo.telephone}\n\n`;
-    message += `📞 Votre livreur vous contactera pour confirmation.\n\n`;
+    message += `Il te contactera pour confirmation.\n\n`;
   }
 
-  message += `📋 **Processus :**\n`;
-  message += `1. ✅ Commande envoyée aux pharmacies\n`;
-  message += `2. 📦 Préparation en cours\n`;
-  message += `3. 🚴 Livreur en route vers les pharmacies\n`;
-  message += `4. 🏠 Livraison à votre adresse\n\n`;
+  message += `Processus :\n`;
+  message += `✅ Commande envoyée\n`;
+  message += `📦 Préparation en cours\n`;
+  message += `🚴 Livreur en route\n`;
+  message += `🏠 Livraison à domicile\n\n`;
 
-  message += `⏰ **Délai estimé :** 45-60 minutes\n\n`;
-
-  message += `📱 **Pour suivre votre commande :**\n`;
-  message += `• Dites "suivi" ou "où en est ma commande ?"\n`;
-  message += `• Dites "merci" pour confirmer\n`;
-  message += `• Dites "autre" pour une nouvelle demande\n\n`;
-
-  message += `📞 **Support & suivi :**\n`;
-  message += `${CONFIG.SUPPORT_PHONE}\n`;
-  message += `🔢 **Référence :** ${numeroCommande}`;
+  message += `Délai estimé : 45-60 minutes\n\n`;
+  
+  message += `Pour suivre ta commande :\n`;
+  message += `• Dis "suivi"\n`;
+  message += `• Dis "merci" pour confirmer\n`;
+  message += `• Dis "autre" pour autre chose\n\n`;
+  
+  message += `📞 Support : ${CONFIG.SUPPORT_PHONE}\n`;
+  message += `Référence : ${numeroCommande}`;
 
   await sendWhatsAppMessage(userId, message);
-
+  
   // Enregistrer l'état "après commande"
   userState.apresCommande = true;
   userState.derniereCommandeRef = numeroCommande;
@@ -2748,84 +2403,69 @@ app.post('/api/webhook', async (req, res) => {
 
         // Traitement avec verrou
         await withUserLock(userId, async () => {
-          // VÉRIFIER D'ABORD LES REMERCIEMENTS ET SUIVI
-          const traiteRemerciement = await gererRemerciementsEtSuivi(userId, text, userState);
-          if (traiteRemerciement) {
-            return;
-          }
-
-          // États de collecte d'informations
+          // SEULEMENT 3 CAS SPÉCIFIQUES GÉRÉS DIRECTEMENT :
+          
+          // 1. États de collecte d'informations (nécessaires pour le processus)
           if (userState.step === 'ATTENTE_NOM' ||
               userState.step === 'ATTENTE_QUARTIER' ||
               userState.step === 'ATTENTE_WHATSAPP' ||
-              userState.step === 'ATTENTE_INDICATIONS') {
-            await collecterInfosLivraison(userId, text, userState);
-            return;
-          }
-
-          if (userState.step === 'ATTENTE_NOM_MULTI' ||
+              userState.step === 'ATTENTE_INDICATIONS' ||
+              userState.step === 'ATTENTE_NOM_MULTI' ||
               userState.step === 'ATTENTE_QUARTIER_MULTI' ||
               userState.step === 'ATTENTE_WHATSAPP_MULTI' ||
               userState.step === 'ATTENTE_INDICATIONS_MULTI') {
-            await collecterInfosLivraisonMulti(userId, text, userState);
+            
+            if (userState.step.includes('MULTI')) {
+              await collecterInfosLivraisonMulti(userId, text, userState);
+            } else {
+              await collecterInfosLivraison(userId, text, userState);
+            }
             return;
           }
-
-          // Gestion du panier
-          const resultatPanier = await gestionPanier.gererMessage(userId, text, userState);
-          if (resultatPanier !== null) {
-            return;
-          }
-
-          // Vérifier états spéciaux
-          if (userState.attenteMedicamentImage) {
-            await rechercherEtAfficherMedicament(userId, text);
-            userState.attenteMedicamentImage = false;
-            userStates.set(userId, userState);
-            return;
-          }
-
-          if (userState.attenteMedicament) {
-            await rechercherEtAfficherMedicament(userId, text);
-            userState.attenteMedicament = false;
-            userStates.set(userId, userState);
-            return;
-          }
-
-          if (userState.attenteCommande && userState.listeMedicamentsAvecIndex) {
-            await traiterCommandeMedicament(userId, text, userState);
-            return;
-          }
-
-          // États de rendez-vous
+          
+          // 2. États de rendez-vous (processus spécifique)
           if (userState.attenteSpecialiteRdv ||
               userState.attenteSelectionCliniqueRdv ||
               userState.attenteDateRdv ||
               userState.attenteHeureRdv ||
               userState.attenteNomRdv ||
               userState.attenteTelephoneRdv) {
-
+            
             await gererPriseRendezVous(userId, text);
             return;
           }
-
-          // UTILISER LA GESTION INTELLIGENTE POUR TOUT LE RESTE
-          await gererMessageIntelligent(userId, text);
-
-          // Mettre à jour historique
-          if (!userState.historiqueMessages) {
-            userState.historiqueMessages = [];
+          
+          // 3. Gestion du panier (commandes spécifiques)
+          const resultatPanier = await gestionPanier.gererMessage(userId, text, userState);
+          if (resultatPanier !== null) {
+            return;
           }
-          userState.historiqueMessages.push({
-            message: text,
-            timestamp: new Date().toISOString()
-          });
-
-          // Limiter historique
-          if (userState.historiqueMessages.length > 20) {
-            userState.historiqueMessages = userState.historiqueMessages.slice(-20);
+          
+          // 4. Commande de médicament (après recherche)
+          if (userState.attenteCommande && userState.listeMedicamentsAvecIndex) {
+            await traiterCommandeMedicament(userId, text, userState);
+            return;
           }
-
+          
+          // 5. Recherche par image
+          if (userState.attenteMedicamentImage) {
+            await rechercherEtAfficherMedicament(userId, text);
+            userState.attenteMedicamentImage = false;
+            userStates.set(userId, userState);
+            return;
+          }
+          
+          // 6. Demande directe de médicament
+          if (userState.attenteMedicament) {
+            await rechercherEtAfficherMedicament(userId, text);
+            userState.attenteMedicament = false;
+            userStates.set(userId, userState);
+            return;
+          }
+          
+          // TOUT LE RESTE : LAISSER GROQ GÉRER NATURELLEMENT
+          await gererMessageNaturel(userId, text);
+          
           userStates.set(userId, userState);
         });
 
@@ -2862,13 +2502,13 @@ app.get('/health', (req, res) => {
   res.status(200).json({
     status: 'OK',
     timestamp: new Date().toISOString(),
-    service: 'Pillbox WhatsApp Bot PRODUCTION V3.3',
-    version: '3.3.0',
+    service: 'Pillbox WhatsApp Bot PRODUCTION V4.0',
+    version: '4.0.0',
     users_actifs: userStates.size,
     uptime: process.uptime(),
     memory: process.memoryUsage(),
     support_phone: CONFIG.SUPPORT_PHONE,
-    features: ['intelligence_conversationnelle', 'multi_medicaments', 'rendez_vous', 'contexte_utilisateur']
+    features: ['conversation_naturelle', 'groq_unique', 'pas_de_messages_fictifs']
   });
 });
 
@@ -2878,8 +2518,7 @@ app.get('/api/stats', (req, res) => {
     users_details: Array.from(userStates.entries()).map(([id, state]) => ({
       id: id,
       step: state.step,
-      panier: state.panier?.length || 0,
-      contexte: state.contexte?.medical?.symptomesActuels || []
+      panier: state.panier?.length || 0
     })),
     timestamp: new Date().toISOString(),
     memory: process.memoryUsage(),
@@ -2904,7 +2543,7 @@ app.get('/api/test', async (req, res) => {
       },
       whatsapp: CONFIG.PHONE_NUMBER_ID ? 'Configured' : 'Not configured',
       groq: CONFIG.GROQ_API_KEY ? 'Configured' : 'Not configured',
-      intelligence: 'Conversationnelle active'
+      intelligence: '100% naturelle avec Groq'
     });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -2950,21 +2589,20 @@ async function verifierDonneesInitiales() {
 app.listen(PORT, HOST, () => {
   console.log(`
 =======================================================
-🚀 PILLBOX WHATSAPP BOT - PRODUCTION V3.3
+🚀 PILLBOX WHATSAPP BOT - PRODUCTION V4.0
 =======================================================
 📍 Port: ${PORT}
 🏙️ Zone: San Pedro uniquement
-🤖 Intelligence: Groq avec contexte conversationnel
-💊 Services: Multi-médicaments, RDV, Conseils
-🧠 Features: Analyse intelligente, gestion de contexte
+🤖 Intelligence: Groq 100% naturel
+💊 Services: Médicaments, Pharmacies, Cliniques, RDV
+🧠 Features: Conversation naturelle, pas de messages fictifs
 📞 Support: ${CONFIG.SUPPORT_PHONE}
 =======================================================
 ✅ PRÊT À RECEVOIR DES MESSAGES !
-✅ Gestion intelligente du contexte
-✅ Compréhension des changements de sujet
-✅ Détection des besoins urgents
-✅ Réponses naturelles et empathiques
-✅ Processus de livraison optimisé
+✅ Conversations 100% naturelles avec Groq
+✅ Pas de réponses scriptées ou fictives
+✅ Changements de sujet gérés naturellement
+✅ Réinitialisation automatique après remerciements
 =======================================================
   `);
 });
