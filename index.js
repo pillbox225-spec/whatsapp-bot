@@ -66,6 +66,12 @@ const CONFIG = {
   }
 };
 
+// Quartiers valides de San Pedro
+const QUARTIERS_SAN_PEDRO = [
+  "lac", "centre-ville", "doba", "sogefiha", "port", "zone industrielle",
+  "cité administrative", "quartier résidentiel", "quartier commercial"
+];
+
 // =================== GESTIONNAIRE DE CONTEXTE ===================
 class GestionnaireContexte {
   constructor() {
@@ -802,31 +808,6 @@ async function sendWhatsAppMessage(to, text) {
   }
 }
 
-// Fonction pour envoyer l'indicateur de saisie CORRIGÉE (STATUS API)
-async function sendTypingIndicator(userId) {
-  try {
-    await axios.post(
-      `https://graph.facebook.com/v19.0/${CONFIG.PHONE_NUMBER_ID}/messages`,
-      {
-        messaging_product: "whatsapp",
-        status: "typing_on",
-        recipient_id: userId,
-        to: userId
-      },
-      {
-        headers: {
-          'Authorization': `Bearer ${CONFIG.WHATSAPP_TOKEN}`,
-          'Content-Type': 'application/json'
-        },
-        timeout: 5000
-      }
-    );
-  } catch (error) {
-    // L'API de statut peut ne pas être disponible, on ignore l'erreur
-    console.log('⚠️ Indicateur de saisie non disponible, continuer sans...');
-  }
-}
-
 // Fonction pour marquer un message comme lu
 async function markMessageAsRead(messageId) {
   try {
@@ -842,11 +823,11 @@ async function markMessageAsRead(messageId) {
           'Authorization': `Bearer ${CONFIG.WHATSAPP_TOKEN}`,
           'Content-Type': 'application/json'
         },
-        timeout: 5000
+        timeout: 10000
       }
     );
   } catch (error) {
-    console.log('⚠️ Marquage message comme lu ignoré:', error.message);
+    console.error('❌ Erreur marquage message comme lu:', error.response?.data || error.message);
   }
 }
 
@@ -854,12 +835,21 @@ async function markMessageAsRead(messageId) {
 async function comprendreEtAgir(userId, message) {
   console.log(`🧠 Analyse: "${message}"`);
 
-  // Envoyer l'indicateur de saisie
-  await sendTypingIndicator(userId);
-
   // Mettre à jour le contexte
   const contexte = await gestionnaireContexte.mettreAJourContexte(userId, message, 'user');
   const resumeContexte = gestionnaireContexte.obtenirResumeContexte(userId);
+
+  // Détection directe des intentions courantes
+  const messageLower = message.toLowerCase();
+  if (messageLower.includes("acheter un médicament") ||
+      messageLower.includes("acheter médicament") ||
+      messageLower.includes("commander médicament")) {
+    return {
+      action: "DEMANDE_NOM_MEDICAMENT",
+      reponse: "Quel médicament souhaitez-vous acheter ? Veuillez préciser le nom exact.",
+      parametres: null
+    };
+  }
 
   try {
     const prompt = `
@@ -883,7 +873,7 @@ ${resumeContexte}
 - Pour les pharmacies: consulter la base de données réelle
 - Pour les rendez-vous: extraire la spécialité
 - Pour les cliniques: consulter la base de données réelle
-- Pour conseils médicales: donner des conseils généraux mais toujours recommander de consulter un médecin
+- Pour conseils médicaux: donner des conseils généraux mais toujours recommander de consulter un médecin
 - NE JAMAIS diagnostiquer
 
 ## ACTIONS DISPONIBLES:
@@ -1953,46 +1943,10 @@ async function traiterImageOrdonnance(userId, userState) {
   userStates.set(userId, userState);
 }
 
-// =================== FONCTIONS UTILITAIRES D'EXTRACTION ===================
-function nettoyerTexte(texte) {
-  if (!texte) return '';
-  return texte
-    .replace(/[`´‘’'"]/g, "'")  // Normaliser apostrophes
-    .replace(/\s+/g, ' ')      // Espaces multiples -> simple
-    .trim();
-}
-
-function extractValue(text, key) {
-  // Chercher avec le format exact "Clé: valeur"
-  const regexExact = new RegExp(`${key}:\\s*([^\\n]+)`, 'i');
-  const matchExact = text.match(regexExact);
-  
-  if (matchExact) {
-    return nettoyerTexte(matchExact[1]);
-  }
-  
-  // Chercher avec le format "Clé : valeur" (avec espace avant :)
-  const regexWithSpace = new RegExp(`${key}\\s*:\\s*([^\\n]+)`, 'i');
-  const matchWithSpace = text.match(regexWithSpace);
-  
-  if (matchWithSpace) {
-    return nettoyerTexte(matchWithSpace[1]);
-  }
-  
-  return null;
-}
-
 // =================== TRAITEMENT INFORMATIONS DE LIVRAISON ===================
 async function traiterInfosLivraison(userId, message, userState) {
-  console.log(`📦 [TRAITEMENT] Infos livraison simple pour ${userId}: "${message.substring(0, 100)}..."`);
-  
-  // Vérifier si c'est un format d'informations de livraison
-  const hasNom = message.toLowerCase().includes('nom:') || extractValue(message, 'nom');
-  const hasQuartier = message.toLowerCase().includes('quartier:') || extractValue(message, 'quartier');
-  const hasWhatsApp = message.toLowerCase().includes('whatsapp:') || extractValue(message, 'whatsapp');
-  
-  if (!hasNom || !hasQuartier || !hasWhatsApp) {
-    // Ce n'est pas un format d'informations de livraison, montrer l'exemple
+  // Instructions
+  if (message.toLowerCase().includes('exemple') || message.toLowerCase().includes('comment')) {
     await sendWhatsAppMessage(
       userId,
       "Format pour finaliser votre commande :\n\n" +
@@ -2000,20 +1954,29 @@ async function traiterInfosLivraison(userId, message, userState) {
       "Nom: [votre nom complet]\n" +
       "Quartier: [votre quartier à San Pedro]\n" +
       "WhatsApp: [votre numéro WhatsApp]\n" +
-      "Indications: [repère pour la livraison]"
+      "Indications: [repère pour livraison]"
     );
     return;
   }
 
-  // Extraire informations
-  const infos = {
-    nom: extractValue(message, 'nom'),
-    quartier: extractValue(message, 'quartier'),
-    whatsapp: extractValue(message, 'whatsapp'),
-    indications: extractValue(message, 'indications')
-  };
+  // Normaliser le message
+  const normalizedMessage = message
+    .replace(/:\s*/g, ':')
+    .replace(/\s+/g, ' ')
+    .trim();
 
-  console.log('📋 [EXTRACTION] Infos extraites (simple):', infos);
+  // Extraire informations
+  const lines = normalizedMessage.split('\n');
+  const infos = {};
+
+  lines.forEach(line => {
+    const match = line.match(/^([^:]+):\s*(.+)$/);
+    if (match) {
+      const cle = match[1].trim().toLowerCase().replace(/[^a-zéèêàâôûîïëüö]/g, '');
+      const valeur = match[2].trim();
+      infos[cle] = valeur;
+    }
+  });
 
   // Vérifier champs
   const champsRequis = ['nom', 'quartier', 'whatsapp'];
@@ -2038,61 +2001,41 @@ async function traiterInfosLivraison(userId, message, userState) {
   }
 
   // Vérifier San Pedro
-  const quartierLower = infos.quartier.toLowerCase();
-  const isSanPedro = quartierLower.includes('san pedro') || 
-                     quartierLower.includes('san-pedro') || 
-                     quartierLower.includes('lac') ||
-                     quartierLower.includes('résidentiel') ||
-                     quartierLower.includes('administratif') ||
-                     quartierLower.includes('btp');
-
-  if (!isSanPedro) {
+  if (!QUARTIERS_SAN_PEDRO.includes(infos.quartier.toLowerCase())) {
     await sendWhatsAppMessage(
       userId,
       "Service uniquement à San Pedro\n\n" +
-      `Votre quartier "${infos.quartier}" doit être à San Pedro.\n\n` +
-      "Exemples de quartiers acceptés :\n" +
-      "• Lac (San Pedro)\n" +
-      "• Résidentiel (San Pedro)\n" +
-      "• Quartier administratif (San Pedro)\n" +
-      "• BTP (San Pedro)\n\n" +
+      "Votre quartier doit être à San Pedro.\n\n" +
       "Corrigez votre quartier :\n" +
-      '"Quartier: [quartier à San Pedro]"'
+      `"Quartier: [quartier à San Pedro]"`
     );
     return;
   }
 
   // Confirmation de commande
   const commande = userState.commandeEnCours;
-  if (!commande) {
-    await sendWhatsAppMessage(userId, "Erreur : aucune commande en cours. Recommencez votre commande.");
-    userState.step = 'MENU_PRINCIPAL';
-    userStates.set(userId, userState);
-    return;
-  }
-
   const numeroCommande = `CMD${Date.now().toString().slice(-6)}`;
 
   await sendWhatsAppMessage(
     userId,
-    `✅ Commande confirmée #${numeroCommande}\n\n` +
-    `👤 Client : ${infos.nom}\n` +
-    `📱 WhatsApp : ${infos.whatsapp}\n` +
-    `🏠 Quartier : ${infos.quartier}\n` +
-    (infos.indications ? `📍 Indications : ${infos.indications}\n\n` : `\n`) +
-    `📋 Commande :\n` +
+    `Commande confirmée #${numeroCommande}\n\n` +
+    `Client : ${infos.nom}\n` +
+    `WhatsApp : ${infos.whatsapp}\n` +
+    `Quartier : ${infos.quartier}\n` +
+    (infos.indications ? `Indications : ${infos.indications}\n\n` : `\n`) +
+    `Commande :\n` +
     `${commande.medicamentNom} × ${commande.quantite}\n` +
-    `🏥 Pharmacie : ${commande.pharmacieNom}\n` +
-    `💰 Total médicaments : ${commande.prixTotal} FCFA\n` +
-    `🚚 Livraison : ${commande.fraisLivraison} FCFA\n` +
-    `💵 TOTAL À PAYER : ${commande.total} FCFA\n\n` +
-    `📋 Prochaines étapes :\n` +
+    `Pharmacie : ${commande.pharmacieNom}\n` +
+    `Total médicaments : ${commande.prixTotal} FCFA\n` +
+    `Livraison : ${commande.fraisLivraison} FCFA\n` +
+    `TOTAL À PAYER : ${commande.total} FCFA\n\n` +
+    `Prochaines étapes :\n` +
     `1. Validation par la pharmacie\n` +
     `2. Appel de confirmation\n` +
     `3. Livraison à domicile\n\n` +
-    `📞 Support & suivi :\n` +
+    `Support & suivi :\n` +
     `${CONFIG.SUPPORT_PHONE}\n` +
-    `🔖 Référence : ${numeroCommande}`
+    `Référence : ${numeroCommande}`
   );
 
   // Réinitialiser
@@ -2104,46 +2047,38 @@ async function traiterInfosLivraison(userId, message, userState) {
 }
 
 async function traiterInfosLivraisonMulti(userId, message, userState) {
-  console.log(`📦 [TRAITEMENT] Infos livraison multi pour ${userId}: "${message.substring(0, 100)}..."`);
-  console.log('🔍 [ETAT] Utilisateur:', {
-    step: userState.step,
-    commandeEnCours: !!userState.commandeEnCours,
-    panier: userState.panier?.length || 0
-  });
-
-  // Vérifier si c'est un format d'informations de livraison
-  const hasNom = message.toLowerCase().includes('nom:') || extractValue(message, 'nom');
-  const hasQuartier = message.toLowerCase().includes('quartier:') || extractValue(message, 'quartier');
-  const hasWhatsApp = message.toLowerCase().includes('whatsapp:') || extractValue(message, 'whatsapp');
-  
-  if (!hasNom || !hasQuartier || !hasWhatsApp) {
-    // Ce n'est pas un format d'informations de livraison, montrer l'exemple
+  // Instructions
+  if (message.toLowerCase().includes('exemple') || message.toLowerCase().includes('comment')) {
     await sendWhatsAppMessage(
       userId,
-      "Format pour finaliser votre commande :\n\n" +
-      "Copiez et complétez exactement :\n\n" +
+      "Format pour plusieurs médicaments :\n\n" +
+      "Copiez et complétez ces 4 lignes :\n\n" +
       "Nom: [votre nom complet]\n" +
       "Quartier: [votre quartier à San Pedro]\n" +
       "WhatsApp: [votre numéro WhatsApp]\n" +
-      "Indications: [repère pour la livraison]\n\n" +
-      "Exemple :\n" +
-      "Nom: Jean Dupont\n" +
-      "Quartier: Lac San Pedro\n" +
-      "WhatsApp: 0701234567\n" +
-      "Indications: Maison bleue à côté du marché"
+      "Indications: [repère pour la livraison]"
     );
     return;
   }
 
-  // Extraire informations
-  const infos = {
-    nom: extractValue(message, 'nom'),
-    quartier: extractValue(message, 'quartier'),
-    whatsapp: extractValue(message, 'whatsapp'),
-    indications: extractValue(message, 'indications')
-  };
+  // Normaliser le message
+  const normalizedMessage = message
+    .replace(/:\s*/g, ':')
+    .replace(/\s+/g, ' ')
+    .trim();
 
-  console.log('📋 [EXTRACTION] Infos extraites (multi):', infos);
+  // Extraire informations
+  const lines = normalizedMessage.split('\n');
+  const infos = {};
+
+  lines.forEach(line => {
+    const match = line.match(/^([^:]+):\s*(.+)$/);
+    if (match) {
+      const cle = match[1].trim().toLowerCase().replace(/[^a-zéèêàâôûîïëüö]/g, '');
+      const valeur = match[2].trim();
+      infos[cle] = valeur;
+    }
+  });
 
   // Vérifier champs
   const champsRequis = ['nom', 'quartier', 'whatsapp'];
@@ -2161,75 +2096,55 @@ async function traiterInfosLivraisonMulti(userId, message, userState) {
           default: return `• ${champ}`;
         }
       }).join('\n') + `\n\n` +
-      `Utilisez ce format exact :\n` +
+      `Utilisez ce format :\n` +
       `"Nom: ...\nQuartier: ...\nWhatsApp: ..."`
     );
     return;
   }
 
   // Vérifier San Pedro
-  const quartierLower = infos.quartier.toLowerCase();
-  const isSanPedro = quartierLower.includes('san pedro') || 
-                     quartierLower.includes('san-pedro') || 
-                     quartierLower.includes('lac') ||
-                     quartierLower.includes('résidentiel') ||
-                     quartierLower.includes('administratif') ||
-                     quartierLower.includes('btp');
-
-  if (!isSanPedro) {
+  if (!QUARTIERS_SAN_PEDRO.includes(infos.quartier.toLowerCase())) {
     await sendWhatsAppMessage(
       userId,
       "Service uniquement à San Pedro\n\n" +
-      `Votre quartier "${infos.quartier}" doit être à San Pedro.\n\n` +
-      "Exemples de quartiers acceptés :\n" +
-      "• Lac (San Pedro)\n" +
-      "• Résidentiel (San Pedro)\n" +
-      "• Quartier administratif (San Pedro)\n" +
-      "• BTP (San Pedro)\n\n" +
+      "Votre quartier doit être à San Pedro.\n\n" +
       "Corrigez votre quartier :\n" +
-      '"Quartier: [quartier à San Pedro]"'
+      `"Quartier: [quartier à San Pedro]"`
     );
     return;
   }
 
   // Confirmation de commande
   const commande = userState.commandeEnCours;
-  if (!commande) {
-    await sendWhatsAppMessage(userId, "Erreur : aucune commande en cours. Recommencez votre commande.");
-    userState.step = 'MENU_PRINCIPAL';
-    userStates.set(userId, userState);
-    return;
-  }
-
   const panier = commande.panier || [];
   const numeroCommande = `CMD${Date.now().toString().slice(-6)}`;
 
-  let messageConfirmation = `✅ Commande confirmée #${numeroCommande}\n\n`;
-  messageConfirmation += `👤 Client : ${infos.nom}\n`;
-  messageConfirmation += `📱 WhatsApp : ${infos.whatsapp}\n`;
-  messageConfirmation += `🏠 Quartier : ${infos.quartier}\n`;
-  if (infos.indications) messageConfirmation += `📍 Indications : ${infos.indications}\n\n`;
+  let messageConfirmation = `Commande confirmée #${numeroCommande}\n\n`;
+  messageConfirmation += `Client : ${infos.nom}\n`;
+  messageConfirmation += `WhatsApp : ${infos.whatsapp}\n`;
+  messageConfirmation += `Quartier : ${infos.quartier}\n`;
+  if (infos.indications) messageConfirmation += `Indications : ${infos.indications}\n\n`;
 
-  messageConfirmation += `📋 Votre commande (${panier.length} médicament(s)) :\n\n`;
+  messageConfirmation += `Votre commande (${panier.length} médicament(s)) :\n\n`;
   panier.forEach((item, index) => {
     messageConfirmation += `${index + 1}. ${item.medicamentNom} × ${item.quantite}\n`;
     messageConfirmation += `   ${item.prixUnitaire} FCFA × ${item.quantite} = ${item.prixUnitaire * item.quantite} FCFA\n`;
-    if (item.necessiteOrdonnance) messageConfirmation += `   📄 Ordonnance requise\n`;
+    if (item.necessiteOrdonnance) messageConfirmation += `   Ordonnance requise\n`;
     messageConfirmation += `\n`;
   });
 
-  messageConfirmation += `💰 Sous-total : ${commande.sousTotal} FCFA\n`;
-  messageConfirmation += `🚚 Livraison : ${commande.fraisLivraison} FCFA\n`;
-  messageConfirmation += `💵 TOTAL À PAYER : ${commande.total} FCFA\n\n`;
+  messageConfirmation += `Sous-total : ${commande.sousTotal} FCFA\n`;
+  messageConfirmation += `Livraison : ${commande.fraisLivraison} FCFA\n`;
+  messageConfirmation += `TOTAL À PAYER : ${commande.total} FCFA\n\n`;
 
-  messageConfirmation += `📋 Prochaines étapes :\n`;
+  messageConfirmation += `Prochaines étapes :\n`;
   messageConfirmation += `1. Validation par les pharmacies\n`;
   messageConfirmation += `2. Appel de confirmation\n`;
   messageConfirmation += `3. Livraison à domicile\n\n`;
 
-  messageConfirmation += `📞 Support & suivi :\n`;
+  messageConfirmation += `Support & suivi :\n`;
   messageConfirmation += `${CONFIG.SUPPORT_PHONE}\n`;
-  messageConfirmation += `🔖 Référence : ${numeroCommande}`;
+  messageConfirmation += `Référence : ${numeroCommande}`;
 
   await sendWhatsAppMessage(userId, messageConfirmation);
 
@@ -2310,19 +2225,14 @@ app.post('/api/webhook', async (req, res) => {
 
         // Traitement avec verrou
         await withUserLock(userId, async () => {
-          // DEBUG: Afficher l'état actuel
-          console.log(`🔍 [DEBUG] État avant traitement: step=${userState.step}, attenteCommande=${userState.attenteCommande}`);
-
           // Gestion du panier
           const resultatPanier = await gestionPanier.gererMessage(userId, text, userState);
           if (resultatPanier !== null) {
-            console.log(`🛒 Panier géré pour ${userId}`);
             return;
           }
 
           // Vérifier états spéciaux
           if (userState.attenteMedicamentImage) {
-            console.log(`🖼️ Recherche par image pour ${userId}`);
             await rechercherEtAfficherMedicament(userId, text);
             userState.attenteMedicamentImage = false;
             userStates.set(userId, userState);
@@ -2330,7 +2240,6 @@ app.post('/api/webhook', async (req, res) => {
           }
 
           if (userState.attenteMedicament) {
-            console.log(`💊 Attente médicament pour ${userId}`);
             await rechercherEtAfficherMedicament(userId, text);
             userState.attenteMedicament = false;
             userStates.set(userId, userState);
@@ -2338,20 +2247,16 @@ app.post('/api/webhook', async (req, res) => {
           }
 
           if (userState.attenteCommande && userState.listeMedicamentsAvecIndex) {
-            console.log(`🛍️ Traitement commande médicament pour ${userId}`);
             await traiterCommandeMedicament(userId, text, userState);
             return;
           }
 
-          // ÉTATS DE LIVRAISON - CORRECTION CRITIQUE
           if (userState.step === 'ATTENTE_INFOS_LIVRAISON') {
-            console.log(`📦 [CRITIQUE] Traitement infos livraison simple pour ${userId}`);
             await traiterInfosLivraison(userId, text, userState);
             return;
           }
 
           if (userState.step === 'ATTENTE_INFOS_LIVRAISON_MULTI') {
-            console.log(`📦 [CRITIQUE] Traitement infos livraison multi pour ${userId}`);
             await traiterInfosLivraisonMulti(userId, text, userState);
             return;
           }
@@ -2364,13 +2269,11 @@ app.post('/api/webhook', async (req, res) => {
               userState.attenteNomRdv ||
               userState.attenteTelephoneRdv) {
 
-            console.log(`📅 Traitement rendez-vous pour ${userId}`);
             await gererPriseRendezVous(userId, text);
             return;
           }
 
           // Utiliser Groq comme cerveau principal
-          console.log(`🤖 Utilisation Groq pour ${userId}`);
           const result = await comprendreEtAgir(userId, text);
 
           // Mettre à jour historique
@@ -2396,29 +2299,24 @@ app.post('/api/webhook', async (req, res) => {
         // Vérifier l'état de l'utilisateur
         if (userState.step === 'ATTENTE_ORDONNANCE') {
           // Ordonnance pour commande en cours
-          console.log(`📄 Ordonnance reçue pour commande simple`);
           await traiterImageOrdonnance(userId, userState);
 
         } else if (userState.step === 'ATTENTE_ORDONNANCE_MULTI') {
           // Ordonnance pour commande multi-médicaments
-          console.log(`📄 Ordonnance reçue pour commande multi`);
           await traiterImageOrdonnance(userId, userState);
 
         } else if (userState.attentePhotoOrdonnance) {
           // Ancien système
-          console.log(`📄 Ordonnance reçue (ancien système)`);
           await traiterImageOrdonnance(userId, userState);
 
         } else {
           // Recherche de médicament par image
-          console.log(`🖼️ Image médicament reçue`);
           await traiterRechercheParImage(userId, mediaId, userState);
         }
       }
 
     } catch (error) {
       console.error('💥 ERREUR WEBHOOK:', error.message);
-      console.error(error.stack);
     }
   });
 });
@@ -2429,7 +2327,7 @@ app.get('/health', (req, res) => {
     status: 'OK',
     timestamp: new Date().toISOString(),
     service: 'Pillbox WhatsApp Bot PRODUCTION',
-    version: '3.0.2',
+    version: '3.0.0',
     users_actifs: userStates.size,
     uptime: process.uptime(),
     memory: process.memoryUsage(),
@@ -2443,8 +2341,7 @@ app.get('/api/stats', (req, res) => {
     users_details: Array.from(userStates.entries()).map(([id, state]) => ({
       id: id,
       step: state.step,
-      panier: state.panier?.length || 0,
-      commandeEnCours: !!state.commandeEnCours
+      initialized: state.initialized
     })),
     timestamp: new Date().toISOString(),
     memory: process.memoryUsage(),
@@ -2514,7 +2411,7 @@ async function verifierDonneesInitiales() {
 app.listen(PORT, HOST, () => {
   console.log(`
 =======================================================
-🚀 PILLBOX WHATSAPP BOT - PRODUCTION V3.0.2
+🚀 PILLBOX WHATSAPP BOT - PRODUCTION V3.0
 =======================================================
 📍 Port: ${PORT}
 🏙️ Zone: San Pedro uniquement
@@ -2523,10 +2420,9 @@ app.listen(PORT, HOST, () => {
 📞 Support: ${CONFIG.SUPPORT_PHONE}
 =======================================================
 ✅ PRÊT À RECEVOIR DES MESSAGES !
-✅ Indicateur de saisie corrigé
-✅ Traitement infos livraison FIXÉ
-✅ Gestion des quartiers de San Pedro
-✅ Logs de débogage améliorés
+✅ Gestion intelligente du contexte
+✅ Achats multi-médicaments
+✅ Compréhension des références
 =======================================================
   `);
 });
