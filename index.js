@@ -19,7 +19,8 @@ let FieldValue;
 // Quartiers valides de San Pedro
 const QUARTIERS_SAN_PEDRO = [
   "lac", "centre-ville", "doba", "sogefiha", "port", "zone industrielle",
-  "cité administrative", "quartier résidentiel", "quartier commercial"
+  "cité administrative", "quartier résidentiel", "quartier commercial",
+  "gare", "airport", "saint-pierre", "zones industrielles", "ville", "centre"
 ];
 
 // Initialisation Firebase
@@ -579,6 +580,8 @@ class GestionPanier {
     }
 
     const { sousTotal, fraisLivraison, total } = this.calculerTotal(panier);
+
+    // Vérifier si ordonnance requise
     const ordonnanceRequise = panier.some(item => item.necessiteOrdonnance);
 
     await sendWhatsAppMessage(
@@ -605,8 +608,7 @@ class GestionPanier {
       ordonnanceRequise: ordonnanceRequise
     };
 
-    // Mettre à jour l'état correctement
-    userState.step = ordonnanceRequise ? 'ATTENTE_ORDONNANCE' : 'ATTENTE_INFOS_LIVRAISON';
+    userState.step = ordonnanceRequise ? 'ATTENTE_ORDONNANCE_MULTI' : 'ATTENTE_INFOS_LIVRAISON_MULTI';
     userStates.set(userId, userState);
   }
 
@@ -882,7 +884,7 @@ ${resumeContexte}
 - Pour les pharmacies: consulter la base de données réelle
 - Pour les rendez-vous: extraire la spécialité
 - Pour les cliniques: consulter la base de données réelle
-- Pour conseils médicaux: donner des conseils généraux mais toujours recommander de consulter un médecin
+- Pour conseils médicals: donner des conseils généraux mais toujours recommander de consulter un médecin
 - NE JAMAIS diagnostiquer
 
 ## ACTIONS DISPONIBLES:
@@ -978,7 +980,7 @@ JSON uniquement:
           'Authorization': `Bearer ${CONFIG.GROQ_API_KEY}`,
           'Content-Type': 'application/json'
         },
-        timeout: 5000 // Timeout de 5 secondes
+        timeout: 5000
       }
     );
 
@@ -1962,7 +1964,21 @@ async function traiterImageOrdonnance(userId, userState) {
 
 // =================== TRAITEMENT INFORMATIONS DE LIVRAISON ===================
 async function traiterInfosLivraison(userId, message, userState) {
-  console.log(`📦 Traitement des infos de livraison pour ${userId}, état : ${userState.step}`);
+  console.log(`📦 Traitement infos livraison: "${message}"`);
+  
+  // Instructions
+  if (message.toLowerCase().includes('exemple') || message.toLowerCase().includes('comment')) {
+    await sendWhatsAppMessage(
+      userId,
+      "Format pour finaliser votre commande :\n\n" +
+      "Copiez et complétez ces 4 lignes :\n\n" +
+      "Nom: [votre nom complet]\n" +
+      "Quartier: [votre quartier à San Pedro]\n" +
+      "WhatsApp: [votre numéro WhatsApp]\n" +
+      "Indications: [repère pour livraison]"
+    );
+    return;
+  }
 
   // Normaliser le message
   const normalizedMessage = message
@@ -1970,12 +1986,15 @@ async function traiterInfosLivraison(userId, message, userState) {
     .replace(/\s+/g, ' ')
     .trim();
 
-  // Extraire les informations
-  const lines = normalizedMessage.split('\n');
-  const infos = {};
+  console.log(`📦 Message normalisé: "${normalizedMessage}"`);
 
+  // Essayer différents formats d'extraction
+  let infos = {};
+  
+  // Méthode 1: Par lignes
+  const lines = normalizedMessage.split('\n');
   lines.forEach(line => {
-    const match = line.match(/^([^:]+):\s*(.+)$/i);
+    const match = line.match(/^([^:]+):\s*(.+)$/);
     if (match) {
       const cle = match[1].trim().toLowerCase();
       const valeur = match[2].trim();
@@ -1983,51 +2002,107 @@ async function traiterInfosLivraison(userId, message, userState) {
     }
   });
 
-  // Vérifier les champs requis
+  // Méthode 2: Si une seule ligne avec séparateurs
+  if (Object.keys(infos).length === 0) {
+    const parts = normalizedMessage.split(/(?=Nom:|Quartier:|WhatsApp:|Indications:)/i);
+    parts.forEach(part => {
+      const match = part.match(/(Nom|Quartier|WhatsApp|Indications):\s*(.+)/i);
+      if (match) {
+        const cle = match[1].toLowerCase();
+        const valeur = match[2].trim();
+        infos[cle] = valeur;
+      }
+    });
+  }
+
+  console.log(`📦 Infos extraites:`, infos);
+
+  // Vérifier champs - rendre plus flexible
   const champsRequis = ['nom', 'quartier', 'whatsapp'];
   const champsManquants = champsRequis.filter(champ => !infos[champ]);
 
   if (champsManquants.length > 0) {
+    // Donner des exemples concrets
     await sendWhatsAppMessage(
       userId,
-      `⚠️ Informations manquantes : ${champsManquants.join(', ')}. Veuillez compléter.`
+      `Informations manquantes :\n\n` +
+      champsManquants.map(champ => {
+        switch(champ) {
+          case 'nom': return "• Nom: Momo Touré";
+          case 'quartier': return "• Quartier: lac (ou centre-ville, doba, sogefiha, port, etc.)";
+          case 'whatsapp': return "• WhatsApp: 0709548989";
+          default: return `• ${champ}`;
+        }
+      }).join('\n') + `\n\n` +
+      `**Exemple complet :**\n` +
+      `Nom: Momo Touré\n` +
+      `Quartier: lac\n` +
+      `WhatsApp: 0709548989\n` +
+      `Indications: vers le marché`
     );
     return;
   }
 
-  // Vérifier que le quartier est valide
-  if (!QUARTIERS_SAN_PEDRO.includes(infos.quartier.toLowerCase())) {
+  // Vérifier San Pedro - normaliser le quartier
+  const quartierNormalise = infos.quartier.toLowerCase();
+  const quartierValide = QUARTIERS_SAN_PEDRO.some(q => 
+    q.toLowerCase().includes(quartierNormalise) || 
+    quartierNormalise.includes(q.toLowerCase())
+  );
+
+  if (!quartierValide) {
     await sendWhatsAppMessage(
       userId,
-      "Désolé, nous ne livrons pas dans ce quartier. Veuillez préciser un quartier de San Pedro."
+      "⚠️ Service uniquement à San Pedro\n\n" +
+      "Votre quartier doit être à San Pedro.\n\n" +
+      "**Quartiers disponibles :**\n" +
+      QUARTIERS_SAN_PEDRO.map(q => `• ${q}`).join('\n') + `\n\n` +
+      `Corrigez votre quartier :\n` +
+      `"Quartier: [un quartier de la liste ci-dessus]"`
     );
     return;
   }
 
-  // Finaliser la commande
+  // Confirmation de commande
   const commande = userState.commandeEnCours;
   const numeroCommande = `CMD${Date.now().toString().slice(-6)}`;
 
   await sendWhatsAppMessage(
     userId,
     `✅ Commande confirmée #${numeroCommande}\n\n` +
-    `Client : ${infos.nom}\n` +
-    `Quartier : ${infos.quartier}\n` +
-    `WhatsApp : ${infos.whatsapp}\n` +
-    (infos.indications ? `Indications : ${infos.indications}\n` : '') +
-    `\nCommande : ${commande.medicamentNom} × ${commande.quantite}\n` +
-    `Pharmacie : ${commande.pharmacieNom}\n` +
-    `TOTAL : ${commande.total} FCFA\n\n` +
-    `Merci pour votre confiance ! Votre commande sera traitée sous peu.`
+    `👤 **Client :** ${infos.nom}\n` +
+    `📱 **WhatsApp :** ${infos.whatsapp}\n` +
+    `📍 **Quartier :** ${infos.quartier}\n` +
+    (infos.indications ? `🗺️ **Indications :** ${infos.indications}\n\n` : `\n`) +
+    `🛒 **Commande :**\n` +
+    `${commande.medicamentNom} × ${commande.quantite}\n` +
+    `🏥 **Pharmacie :** ${commande.pharmacieNom}\n` +
+    `💰 **Total médicaments :** ${commande.prixTotal} FCFA\n` +
+    `🚚 **Livraison :** ${commande.fraisLivraison} FCFA\n` +
+    `💵 **TOTAL À PAYER :** ${commande.total} FCFA\n\n` +
+    `📋 **Prochaines étapes :**\n` +
+    `1. Validation par la pharmacie\n` +
+    `2. Appel de confirmation dans 5-10 minutes\n` +
+    `3. Livraison à domicile\n\n` +
+    `📞 **Support & suivi :**\n` +
+    `${CONFIG.SUPPORT_PHONE}\n` +
+    `🔢 **Référence :** ${numeroCommande}\n\n` +
+    `⏰ **Délai estimé :** 45-60 minutes`
   );
 
-  // Réinitialiser l'état utilisateur
-  userState.step = 'MENU_PRINCIPAL';
+  // Réinitialiser
   userState.commandeEnCours = null;
+  userState.resultatsRechercheMedicaments = null;
+  userState.listeMedicamentsAvecIndex = [];
+  userState.step = 'MENU_PRINCIPAL';
   userStates.set(userId, userState);
+
+  console.log(`✅ Commande finalisée pour ${userId}`);
 }
 
 async function traiterInfosLivraisonMulti(userId, message, userState) {
+  console.log(`📦 Traitement infos livraison multi: "${message}"`);
+  
   // Instructions
   if (message.toLowerCase().includes('exemple') || message.toLowerCase().includes('comment')) {
     await sendWhatsAppMessage(
@@ -2042,18 +2117,21 @@ async function traiterInfosLivraisonMulti(userId, message, userState) {
     return;
   }
 
-  // Normaliser le message
+  // Vérifier si le message contient le format attendu
   const normalizedMessage = message
     .replace(/:\s*/g, ':')
     .replace(/\s+/g, ' ')
     .trim();
 
-  // Extraire informations
-  const lines = normalizedMessage.split('\n');
-  const infos = {};
+  console.log(`📦 Message normalisé: "${normalizedMessage}"`);
 
+  // Essayer différents formats d'extraction
+  let infos = {};
+  
+  // Méthode 1: Par lignes
+  const lines = normalizedMessage.split('\n');
   lines.forEach(line => {
-    const match = line.match(/^([^:]+):\s*(.+)$/i);
+    const match = line.match(/^([^:]+):\s*(.+)$/);
     if (match) {
       const cle = match[1].trim().toLowerCase();
       const valeur = match[2].trim();
@@ -2061,36 +2139,63 @@ async function traiterInfosLivraisonMulti(userId, message, userState) {
     }
   });
 
-  // Vérifier champs
+  // Méthode 2: Si une seule ligne avec séparateurs
+  if (Object.keys(infos).length === 0) {
+    const parts = normalizedMessage.split(/(?=Nom:|Quartier:|WhatsApp:|Indications:)/i);
+    parts.forEach(part => {
+      const match = part.match(/(Nom|Quartier|WhatsApp|Indications):\s*(.+)/i);
+      if (match) {
+        const cle = match[1].toLowerCase();
+        const valeur = match[2].trim();
+        infos[cle] = valeur;
+      }
+    });
+  }
+
+  console.log(`📦 Infos extraites:`, infos);
+
+  // Vérifier champs - rendre plus flexible
   const champsRequis = ['nom', 'quartier', 'whatsapp'];
   const champsManquants = champsRequis.filter(champ => !infos[champ]);
 
   if (champsManquants.length > 0) {
+    // Donner des exemples concrets
     await sendWhatsAppMessage(
       userId,
       `Informations manquantes :\n\n` +
       champsManquants.map(champ => {
         switch(champ) {
-          case 'nom': return "• Nom: [Votre nom complet]";
-          case 'quartier': return "• Quartier: [Votre quartier à San Pedro]";
-          case 'whatsapp': return "• WhatsApp: [Votre numéro]";
+          case 'nom': return "• Nom: Momo Touré";
+          case 'quartier': return "• Quartier: lac (ou centre-ville, doba, sogefiha, port, etc.)";
+          case 'whatsapp': return "• WhatsApp: 0709548989";
           default: return `• ${champ}`;
         }
       }).join('\n') + `\n\n` +
-      `Utilisez ce format :\n` +
-      `"Nom: ...\nQuartier: ...\nWhatsApp: ..."`
+      `**Exemple complet :**\n` +
+      `Nom: Momo Touré\n` +
+      `Quartier: lac\n` +
+      `WhatsApp: 0709548989\n` +
+      `Indications: vers le marché`
     );
     return;
   }
 
-  // Vérifier San Pedro
-  if (!QUARTIERS_SAN_PEDRO.includes(infos.quartier.toLowerCase())) {
+  // Vérifier San Pedro - normaliser le quartier
+  const quartierNormalise = infos.quartier.toLowerCase();
+  const quartierValide = QUARTIERS_SAN_PEDRO.some(q => 
+    q.toLowerCase().includes(quartierNormalise) || 
+    quartierNormalise.includes(q.toLowerCase())
+  );
+
+  if (!quartierValide) {
     await sendWhatsAppMessage(
       userId,
-      "Service uniquement à San Pedro\n\n" +
+      "⚠️ Service uniquement à San Pedro\n\n" +
       "Votre quartier doit être à San Pedro.\n\n" +
-      "Corrigez votre quartier :\n" +
-      `"Quartier: [quartier à San Pedro]"`
+      "**Quartiers disponibles :**\n" +
+      QUARTIERS_SAN_PEDRO.map(q => `• ${q}`).join('\n') + `\n\n` +
+      `Corrigez votre quartier :\n` +
+      `"Quartier: [un quartier de la liste ci-dessus]"`
     );
     return;
   }
@@ -2100,32 +2205,34 @@ async function traiterInfosLivraisonMulti(userId, message, userState) {
   const panier = commande.panier || [];
   const numeroCommande = `CMD${Date.now().toString().slice(-6)}`;
 
-  let messageConfirmation = `Commande confirmée #${numeroCommande}\n\n`;
-  messageConfirmation += `Client : ${infos.nom}\n`;
-  messageConfirmation += `WhatsApp : ${infos.whatsapp}\n`;
-  messageConfirmation += `Quartier : ${infos.quartier}\n`;
-  if (infos.indications) messageConfirmation += `Indications : ${infos.indications}\n\n`;
+  let messageConfirmation = `✅ Commande confirmée #${numeroCommande}\n\n`;
+  messageConfirmation += `👤 **Client :** ${infos.nom}\n`;
+  messageConfirmation += `📱 **WhatsApp :** ${infos.whatsapp}\n`;
+  messageConfirmation += `📍 **Quartier :** ${infos.quartier}\n`;
+  if (infos.indications) messageConfirmation += `🗺️ **Indications :** ${infos.indications}\n\n`;
 
-  messageConfirmation += `Votre commande (${panier.length} médicament(s)) :\n\n`;
+  messageConfirmation += `🛒 **Votre commande (${panier.length} médicament(s)) :**\n\n`;
   panier.forEach((item, index) => {
     messageConfirmation += `${index + 1}. ${item.medicamentNom} × ${item.quantite}\n`;
-    messageConfirmation += `   ${item.prixUnitaire} FCFA × ${item.quantite} = ${item.prixUnitaire * item.quantite} FCFA\n`;
-    if (item.necessiteOrdonnance) messageConfirmation += `   Ordonnance requise\n`;
+    const totalItem = item.prixUnitaire * item.quantite;
+    messageConfirmation += `   ${item.prixUnitaire} FCFA × ${item.quantite} = ${totalItem} FCFA\n`;
+    if (item.necessiteOrdonnance) messageConfirmation += `   📄 Ordonnance requise\n`;
     messageConfirmation += `\n`;
   });
 
-  messageConfirmation += `Sous-total : ${commande.sousTotal} FCFA\n`;
-  messageConfirmation += `Livraison : ${commande.fraisLivraison} FCFA\n`;
-  messageConfirmation += `TOTAL À PAYER : ${commande.total} FCFA\n\n`;
+  messageConfirmation += `💰 **Sous-total :** ${commande.sousTotal} FCFA\n`;
+  messageConfirmation += `🚚 **Livraison :** ${commande.fraisLivraison} FCFA\n`;
+  messageConfirmation += `💵 **TOTAL À PAYER :** ${commande.total} FCFA\n\n`;
 
-  messageConfirmation += `Prochaines étapes :\n`;
+  messageConfirmation += `📋 **Prochaines étapes :**\n`;
   messageConfirmation += `1. Validation par les pharmacies\n`;
-  messageConfirmation += `2. Appel de confirmation\n`;
+  messageConfirmation += `2. Appel de confirmation dans 5-10 minutes\n`;
   messageConfirmation += `3. Livraison à domicile\n\n`;
 
-  messageConfirmation += `Support & suivi :\n`;
+  messageConfirmation += `📞 **Support & suivi :**\n`;
   messageConfirmation += `${CONFIG.SUPPORT_PHONE}\n`;
-  messageConfirmation += `Référence : ${numeroCommande}`;
+  messageConfirmation += `🔢 **Référence :** ${numeroCommande}\n\n`;
+  messageConfirmation += `⏰ **Délai estimé :** 45-60 minutes`;
 
   await sendWhatsAppMessage(userId, messageConfirmation);
 
@@ -2136,6 +2243,8 @@ async function traiterInfosLivraisonMulti(userId, message, userState) {
   userState.listeMedicamentsAvecIndex = [];
   userState.step = 'MENU_PRINCIPAL';
   userStates.set(userId, userState);
+
+  console.log(`✅ Commande finalisée pour ${userId}`);
 }
 
 // =================== WEBHOOK WHATSAPP ===================
@@ -2232,13 +2341,13 @@ app.post('/api/webhook', async (req, res) => {
             return;
           }
 
-          // Vérifier les deux états de livraison
-          if (userState.step === 'ATTENTE_INFOS_LIVRAISON' || userState.step === 'ATTENTE_INFOS_LIVRAISON_MULTI') {
-            if (userState.modeMulti) {
-              await traiterInfosLivraisonMulti(userId, text, userState);
-            } else {
-              await traiterInfosLivraison(userId, text, userState);
-            }
+          if (userState.step === 'ATTENTE_INFOS_LIVRAISON') {
+            await traiterInfosLivraison(userId, text, userState);
+            return;
+          }
+
+          if (userState.step === 'ATTENTE_INFOS_LIVRAISON_MULTI') {
+            await traiterInfosLivraisonMulti(userId, text, userState);
             return;
           }
 
