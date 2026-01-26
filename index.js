@@ -232,7 +232,7 @@ class GestionnaireContexte {
   detecterConfusion(texte, userState) {
     const motsConfusion = ['ahok', 'quoi', 'comment', 'hein', 'pardon', 'je comprends pas', 'je vois pas'];
     const estConfus = motsConfusion.some(mot => texte.includes(mot));
-    
+
     if (estConfus) {
       userState.contexte.emotionnel.confusionNiveau = Math.min(10, userState.contexte.emotionnel.confusionNiveau + 2);
       userState.contexte.emotionnel.ton = 'confus';
@@ -870,23 +870,23 @@ async function markMessageAsRead(messageId) {
 // =================== GESTION DES REMERCIEMENTS ET SUIVI ===================
 async function gererRemerciementsEtSuivi(userId, message, userState) {
   const texte = message.toLowerCase().trim();
-  
+
   // Détecter les remerciements
   const remerciements = ['merci', 'thanks', 'thank you', 'merci beaucoup', 'super', 'parfait', 'génial'];
   const estRemerciement = remerciements.some(mot => texte.includes(mot));
-  
+
   // Détecter les demandes de suivi
   const suiviMots = ['suivi', 'suivre', 'statut', 'où en est', 'avancement', 'attends', 'attendre'];
   const estDemandeSuivi = suiviMots.some(mot => texte.includes(mot));
-  
+
   // Détecter les nouvelles demandes
   const nouvelleDemandeMots = ['autre', 'encore', 'nouveau', 'différent', 'acheter', 'commander', 'médicament', 'pharmacie', 'rendez-vous', 'rdv'];
   const estNouvelleDemande = nouvelleDemandeMots.some(mot => texte.includes(mot));
-  
+
   // Vérifier les demandes spécifiques de suivi RDV
-  if (texte.includes('suivi rdv') || texte.includes('statut rendez-vous') || 
+  if (texte.includes('suivi rdv') || texte.includes('statut rendez-vous') ||
       texte.includes('où en est mon rdv') || texte.includes('mon rendez-vous')) {
-    
+
     if (userState.dernierRdvRef) {
       await sendWhatsAppMessage(
         userId,
@@ -907,7 +907,7 @@ async function gererRemerciementsEtSuivi(userId, message, userState) {
     }
     return true;
   }
-  
+
   // État "après commande"
   if (userState.apresCommande) {
     if (estRemerciement) {
@@ -917,13 +917,13 @@ async function gererRemerciementsEtSuivi(userId, message, userState) {
         `Votre commande #${userState.derniereCommandeRef || ''} est en cours de traitement.\n\n` +
         `N'hésitez pas si vous avez d'autres questions ou besoins ! 😊`
       );
-      
+
       // Réinitialiser l'état après commande
       userState.apresCommande = false;
       userStates.set(userId, userState);
       return true;
     }
-    
+
     if (estDemandeSuivi) {
       await sendWhatsAppMessage(
         userId,
@@ -941,7 +941,7 @@ async function gererRemerciementsEtSuivi(userId, message, userState) {
       );
       return true;
     }
-    
+
     if (estNouvelleDemande) {
       // Réinitialiser pour nouvelle demande
       userState.apresCommande = false;
@@ -949,7 +949,7 @@ async function gererRemerciementsEtSuivi(userId, message, userState) {
       return false; // Laisser Groq traiter
     }
   }
-  
+
   // État "après rendez-vous"
   if (userState.apresRendezVous) {
     if (estRemerciement) {
@@ -959,13 +959,13 @@ async function gererRemerciementsEtSuivi(userId, message, userState) {
         `Votre rendez-vous ${userState.dernierRdvRef || ''} est en attente de confirmation.\n\n` +
         `Besoin d'autre chose ? Je suis à votre disposition ! 😊`
       );
-      
+
       userState.apresRendezVous = false;
       userStates.set(userId, userState);
       return true;
     }
   }
-  
+
   // Détection générale des remerciements
   if (estRemerciement && !userState.apresCommande && !userState.apresRendezVous) {
     await sendWhatsAppMessage(
@@ -979,9 +979,9 @@ async function gererRemerciementsEtSuivi(userId, message, userState) {
     );
     return true;
   }
-  
+
   // Détection des confirmations d'attente
-  if (texte.includes("j'attends") || texte.includes("j’attends") || 
+  if (texte.includes("j'attends") || texte.includes("j’attends") ||
       texte.includes("attends") || texte.includes("ok j'attends")) {
     await sendWhatsAppMessage(
       userId,
@@ -991,7 +991,7 @@ async function gererRemerciementsEtSuivi(userId, message, userState) {
     );
     return true;
   }
-  
+
   return false;
 }
 
@@ -1004,9 +1004,66 @@ async function comprendreEtAgir(userId, message) {
   const contexte = await gestionnaireContexte.mettreAJourContexte(userId, message, 'user');
   const resumeContexte = gestionnaireContexte.obtenirResumeContexte(userId);
 
+  // Analyser l'intention et le contexte
+  const messageLower = message.toLowerCase();
+
+  // Détection de demande d'aide médicale urgente
+  if (messageLower.includes("aide moi") ||
+      messageLower.includes("s'il te plaît") ||
+      messageLower.includes("urgent") ||
+      messageLower.includes("mal à la tête") ||
+      messageLower.includes("mal a la tête") ||
+      messageLower.includes("mal a tête")) {
+
+    // D'abord répondre avec empathie
+    await sendWhatsAppMessage(userId, "🤕 Je vois que vous avez mal à la tête. Je peux vous aider de plusieurs façons :");
+
+    // Ensuite proposer des options
+    await sendWhatsAppMessage(userId,
+      "💊 **Médicaments disponibles pour les maux de tête :**\n" +
+      "• Paracétamol - pour la douleur légère à modérée\n" +
+      "• Ibuprofène - pour les douleurs inflammatoires\n\n" +
+      "🏥 **Autres options :**\n" +
+      "• Trouver une pharmacie de garde\n" +
+      "• Consulter un médecin\n" +
+      "• Obtenir des conseils médicaux\n\n" +
+      "Que souhaitez-vous faire ?"
+    );
+
+    // Mettre à jour le contexte
+    userState.attenteMedicament = true;
+    userStates.set(userId, userState);
+
+    return {
+      action: "CONSEIL_MEDICAL_URGENT",
+      reponse: "Proposé des options pour maux de tête"
+    };
+  }
+
+  // Détection de confusion (mot "ahok")
+  if (messageLower.includes("ahok")) {
+    await sendWhatsAppMessage(userId,
+      "Je comprends que vous avez peut-être plusieurs questions. Laissez-moi clarifier :\n\n" +
+      "Je peux vous aider pour :\n" +
+      "1. 💊 **Acheter un médicament** - Dites le nom exact\n" +
+      "2. 🏥 **Pharmacies de garde** - Disponibles 24h/24\n" +
+      "3. 👨‍⚕️ **Cliniques à San Pedro** - Avec leurs spécialités\n" +
+      "4. 📅 **Rendez-vous médicaux** - Avec des spécialistes\n\n" +
+      "Que souhaitez-vous faire ?"
+    );
+
+    userState.step = 'MENU_PRINCIPAL';
+    userStates.set(userId, userState);
+
+    return {
+      action: "CLARIFICATION_CONFUSION",
+      reponse: "Clarifié les options disponibles"
+    };
+  }
+
   try {
     const prompt = `
-Tu es Mia, assistante médicale à San Pedro. Analyse le message de l'utilisateur et comprends son intention réelle naturellement, comme dans une conversation humaine.
+Tu es Mia, assistante médicale à San Pedro. Analyse le message de l'utilisateur et comprends son intention réelle.
 
 ## CONTEXTE DE LA CONVERSATION:
 ${resumeContexte}
@@ -1018,13 +1075,16 @@ ${resumeContexte}
 - Étape actuelle: ${userState.step}
 - Panier: ${userState.panier?.length || 0} médicament(s)
 - Dernière recherche: ${userState.resultatsRechercheMedicaments ? 'médicament trouvé' : 'aucune'}
+- Attente: ${userState.attenteMedicament ? 'nom médicament' :
+            userState.attenteNom ? 'nom client' :
+            userState.attenteRendezVous ? 'infos rdv' : 'aucune'}
 
 ## TON ET STYLE:
 - Empathique et professionnelle
 - Réponds toujours en français simple et clair
-- Comprends le contexte naturellement
-- Sois humaine dans tes réponses
-- Si confusion, demande naturellement ce qu'il veut
+- Clarifie les ambiguïtés
+- Propose des solutions concrètes
+- Si confusion, résume ce que tu as compris
 
 ## RÈGLES IMPORTANTES:
 - NE JAMAIS inventer de médicaments, pharmacies ou cliniques
@@ -1035,83 +1095,58 @@ ${resumeContexte}
 - Service uniquement à San Pedro
 
 ## ANALYSE À FAIRE:
-1. Quelle est l'intention PRIMAIRE ? (commander, information, urgence, clarification, remerciement)
+1. Quelle est l'intention PRIMAIRE ? (commander, information, urgence, clarification)
 2. Y a-t-il une demande IMPLICITE ? (besoin d'aide, confusion, frustration)
 3. Le message fait-il référence à un CONTEXTE PRÉCÉDENT ?
 4. L'utilisateur est-il en ATTENTE d'une réponse spécifique ?
 
-## EXEMPLES DE COMPRÉHENSION NATURELLE :
+## ACTIONS DISPONIBLES:
+- RECHERCHE_MEDICAMENT → si demande de médicament spécifique
+- DEMANDE_NOM_MEDICAMENT → si veut acheter mais pas précis
+- PHARMACIE_GARDE → si "pharmacie de garde"
+- LISTE_CLINIQUES → si demande de cliniques
+- DEMANDE_RENDEZ_VOUS → si "rendez-vous" ou spécialité
+- CONSEIL_MEDICAL → si symptôme ou conseil
+- CLARIFICATION → si confusion ou répétition
+- CHANGEMENT_SUJET → si changement de sujet
+- SUPPORT → si problème technique
 
-Utilisateur: "Merci" (après une commande)
-→ Expression de gratitude après transaction
+## EXEMPLES DE SITUATIONS:
+
+Utilisateur: "Ahok je vois qu'elle sont les cliniques disponible a san Pedro"
+→ Changement de sujet après médicaments
 {
-  "action": "REPONSE_GRATITUDE",
-  "reponse": "Je vous en prie ! C'est un plaisir de vous aider. Votre commande est en cours. N'hésitez pas si vous avez besoin d'autre chose ! 😊",
-  "parametres": {"contexte": "post_commande"},
-  "next_step": "MENU_PRINCIPAL"
+  "action": "CHANGEMENT_SUJET",
+  "reponse": "Je vois que vous souhaitez maintenant connaître les cliniques disponibles à San Pedro. Je recherche les cliniques pour vous...",
+  "parametres": {"ancien_sujet": "médicaments", "nouveau_sujet": "cliniques"},
+  "next_step": "LISTE_CLINIQUES"
 }
 
-Utilisateur: "Quelle pharmacie est de garde aujourd'hui" (changement de sujet)
-→ Demande d'information après interaction
+Utilisateur: "Ok j'ai mal a la tête" (après avoir parlé de pharmacies)
+→ Expression de symptôme, besoin d'aide
 {
-  "action": "INFORMATION_PHARMACIE_GARDE",
-  "reponse": "Je vais rechercher les pharmacies de garde disponibles aujourd'hui à San Pedro...",
-  "parametres": {"type": "pharmacie_de_garde", "urgence": "non"},
-  "next_step": "AFFICHER_PHARMACIES_GARDE"
-}
-
-Utilisateur: "J'ai mal à la tête" (expression symptôme)
-→ Demande d'aide médicale
-{
-  "action": "CONSEIL_MEDICAL",
-  "reponse": "Je comprends que vous avez mal à la tête. Je peux vous aider de plusieurs façons :\n\n1. 💊 **Médicaments pour maux de tête** - comme le paracétamol\n2. 🏥 **Trouver un médecin** - pour une consultation\n3. 📅 **Prendre rendez-vous** - avec un spécialiste\n\nQue préférez-vous ?",
-  "parametres": {"symptome": "mal_de_tete", "urgence": "moyenne"},
+  "action": "RECONNAISSANCE_SYMPTOME",
+  "reponse": "Je comprends que votre mal de tête vous préoccupe. Pour les maux de tête, je peux vous aider à trouver du paracétamol ou consulter un médecin si la douleur persiste. Que préférez-vous ?",
+  "parametres": {"symptome": "mal de tête", "urgence": "moyenne"},
   "next_step": "ATTENTE_CHOIX"
 }
 
-Utilisateur: "Paracetamol" (demande directe)
-→ Demande claire de médicament
+Utilisateur: "Les pharmacies de garde aujourd'hui" (répétition)
+→ L'utilisateur insiste
+{
+  "action": "CLARIFICATION",
+  "reponse": "Je vais rechercher à nouveau les pharmacies de garde disponibles aujourd'hui à San Pedro...",
+  "parametres": null,
+  "next_step": "PHARMACIE_GARDE"
+}
+
+Utilisateur: "Paracetamol"
+→ Demande simple et claire
 {
   "action": "RECHERCHE_MEDICAMENT",
   "reponse": "Je recherche du paracétamol pour vous...",
   "parametres": {"nom_medicament": "paracétamol"},
   "next_step": "RECHERCHE_MEDICAMENT"
-}
-
-Utilisateur: "Ahok" (expression de confusion)
-→ Utilisateur confus ou qui ne comprend pas
-{
-  "action": "CLARIFICATION",
-  "reponse": "Je vois que vous avez peut-être plusieurs questions. Laissez-moi clarifier ce que je peux faire pour vous :\n\n💊 **Acheter un médicament** - Dites simplement le nom\n🏥 **Pharmacies de garde** - Disponibles 24h/24\n👨‍⚕️ **Cliniques à San Pedro** - Avec leurs spécialités\n📅 **Rendez-vous médicaux** - Avec des spécialistes\n\nQue souhaitez-vous faire ?",
-  "parametres": {"etat": "confus", "action": "clarifier_options"},
-  "next_step": "MENU_PRINCIPAL"
-}
-
-Utilisateur: "Je veux commander" (demande générale)
-→ Début d'une commande
-{
-  "action": "DEMANDE_NOM_MEDICAMENT",
-  "reponse": "Avec plaisir ! Quel médicament souhaitez-vous commander ? Dites-moi le nom exact.",
-  "parametres": null,
-  "next_step": "ATTENTE_NOM_MEDICAMENT"
-}
-
-Utilisateur: "Les cliniques à San Pedro" (demande d'information)
-→ Demande de liste de cliniques
-{
-  "action": "LISTE_CLINIQUES",
-  "reponse": "Je vais vous montrer les cliniques disponibles à San Pedro...",
-  "parametres": null,
-  "next_step": "AFFICHER_CLINIQUES"
-}
-
-Utilisateur: "Rendez-vous avec un dermatologue" (demande spécifique)
-→ Prise de rendez-vous
-{
-  "action": "DEMANDE_RENDEZ_VOUS",
-  "reponse": "Je comprends que vous souhaitez un rendez-vous avec un dermatologue. Je recherche les cliniques avec cette spécialité...",
-  "parametres": {"specialite": "dermatologue"},
-  "next_step": "RECHERCHE_CLINIQUES_RDV"
 }
 
 ## RÉPONSE FINALE (JSON uniquement):
@@ -1135,7 +1170,7 @@ Utilisateur: "Rendez-vous avec un dermatologue" (demande spécifique)
           { role: "user", content: prompt }
         ],
         temperature: 0.4,
-        max_tokens: 500,
+        max_tokens: 400,
         response_format: { type: "json_object" }
       },
       {
@@ -1155,10 +1190,10 @@ Utilisateur: "Rendez-vous avec un dermatologue" (demande spécifique)
 
     // Mettre à jour l'état basé sur l'analyse
     await executerActionIntelligente(userId, result, message, userState);
-    
+
     // Mettre à jour le contexte avec la réponse de l'assistant
     await gestionnaireContexte.mettreAJourContexte(userId, result.reponse, 'assistant');
-    
+
     return result;
 
   } catch (error) {
@@ -1166,14 +1201,14 @@ Utilisateur: "Rendez-vous avec un dermatologue" (demande spécifique)
     // Réponse de secours intelligente
     await sendWhatsAppMessage(
       userId,
-      "Je comprends que vous avez plusieurs questions. Laissez-moi vous aider naturellement :\n\n" +
-      "1. 💊 **Médicaments** - Dites-moi simplement le nom\n" +
+      "Je comprends que vous avez plusieurs questions. Laissez-moi vous aider :\n\n" +
+      "1. 💊 **Médicaments** - Dites-moi le nom exact\n" +
       "2. 🏥 **Pharmacies de garde** - Je peux les rechercher\n" +
       "3. 👨‍⚕️ **Cliniques** - Je connais celles à San Pedro\n" +
       "4. 📅 **Rendez-vous** - Avec quel spécialiste ?\n\n" +
       "Que souhaitez-vous faire ?"
     );
-    
+
     // Réinitialiser l'état pour conversation normale
     userState.step = 'MENU_PRINCIPAL';
     userState.attenteMedicament = false;
@@ -1190,78 +1225,95 @@ async function executerActionIntelligente(userId, result, messageOriginal, userS
   console.log(`🤖 Exécution action intelligente: ${action}`);
 
   switch (action) {
-    case 'INFORMATION_PHARMACIE_GARDE':
-    case 'PHARMACIE_GARDE':
-    case 'PHARMACIE_GARDE_DIRECT':
-      // Réinitialiser l'état pour nouvelle requête
+    case 'CHANGEMENT_SUJET':
+      // L'utilisateur change de sujet, on réinitialise l'état précédent
+      console.log(`🔄 Changement de sujet: ${parametres.ancien_sujet} → ${parametres.nouveau_sujet}`);
+
+      // Réinitialiser l'état lié à l'ancien sujet
+      if (parametres.ancien_sujet === 'médicaments') {
+        userState.attenteMedicament = false;
+        userState.attenteCommande = false;
+        userState.resultatsRechercheMedicaments = null;
+      }
+
+      // Traiter le nouveau sujet basé sur next_step
+      if (result.next_step === 'LISTE_CLINIQUES') {
+        await afficherListeCliniquesReelles(userId);
+      } else if (result.next_step === 'PHARMACIE_GARDE') {
+        await afficherPharmaciesDeGarde(userId);
+      } else if (result.next_step === 'RECHERCHE_MEDICAMENT') {
+        const nomMedicament = parametres.nom_medicament || extraireNomMedicament(messageOriginal);
+        if (nomMedicament) {
+          await rechercherEtAfficherMedicament(userId, nomMedicament);
+        }
+      }
+
+      userState.step = 'MENU_PRINCIPAL';
+      break;
+
+    case 'RECONNAISSANCE_SYMPTOME':
+      // L'utilisateur exprime un symptôme
+      console.log(`⚠️ Reconnaissance symptôme: ${JSON.stringify(parametres)}`);
+
+      if (parametres.symptome === 'mal de tête') {
+        userState.attenteMedicament = true; // Prêt à recevoir nom de médicament
+      }
+      break;
+
+    case 'CLARIFICATION':
+      // L'utilisateur semble confus ou répète
+      console.log(`❓ Clarification demandée`);
+
+      // Réinitialiser à un état clair
       userState.step = 'MENU_PRINCIPAL';
       userState.attenteMedicament = false;
       userState.attenteCommande = false;
-      userStates.set(userId, userState);
-      
-      await afficherPharmaciesDeGarde(userId);
+
+      // Exécuter l'action suggérée
+      if (result.next_step === 'PHARMACIE_GARDE') {
+        await afficherPharmaciesDeGarde(userId);
+      } else if (result.next_step === 'LISTE_CLINIQUES') {
+        await afficherListeCliniquesReelles(userId);
+      }
       break;
-      
-    case 'REPONSE_GRATITUDE':
-      // Juste envoyer la réponse, pas de changement d'état
-      // La réponse est déjà envoyée par Groq
-      break;
-      
+
     case 'RECHERCHE_MEDICAMENT':
+      // Rechercher le médicament demandé
       const nomMedicament = parametres.nom_medicament || extraireNomMedicament(messageOriginal);
       if (nomMedicament) {
         await rechercherEtAfficherMedicament(userId, nomMedicament);
       }
       break;
-      
-    case 'CONSEIL_MEDICAL':
-      // Réinitialiser pour nouvelle conversation
-      userState.step = 'MENU_PRINCIPAL';
-      userState.attenteMedicament = true; // Prêt pour nom de médicament
-      userStates.set(userId, userState);
-      break;
-      
-    case 'CLARIFICATION':
-      userState.step = 'MENU_PRINCIPAL';
-      userState.attenteMedicament = false;
-      userState.attenteCommande = false;
-      userStates.set(userId, userState);
-      break;
-      
-    case 'DEMANDE_NOM_MEDICAMENT':
-      userState.attenteMedicament = true;
-      userStates.set(userId, userState);
-      break;
-      
+
     case 'LISTE_CLINIQUES':
-      userState.step = 'MENU_PRINCIPAL';
-      userStates.set(userId, userState);
       await afficherListeCliniquesReelles(userId);
       break;
-      
+
+    case 'PHARMACIE_GARDE':
+      await afficherPharmaciesDeGarde(userId);
+      break;
+
+    case 'DEMANDE_NOM_MEDICAMENT':
+      await sendWhatsAppMessage(userId, "Quel médicament souhaitez-vous acheter ? Veuillez préciser le nom exact.");
+      userState.attenteMedicament = true;
+      break;
+
     case 'DEMANDE_RENDEZ_VOUS':
       const specialite = parametres.specialite || extraireSpecialite(messageOriginal);
       if (specialite) {
         await chercherCliniquesParSpecialitePourRdv(userId, specialite);
       } else {
         userState.attenteSpecialiteRdv = true;
-        userStates.set(userId, userState);
       }
       break;
-      
-    case 'REPONSE_GRATITUDE':
-      // La réponse est déjà envoyée par Groq
-      userState.apresCommande = false;
-      userState.apresRendezVous = false;
-      userState.step = 'MENU_PRINCIPAL';
-      userStates.set(userId, userState);
-      break;
-      
+
     default:
-      // Pour les autres actions, appeler la logique basique
+      // Action par défaut
       await executerActionBasique(userId, result, messageOriginal, userState);
       break;
   }
+
+  userStates.set(userId, userState);
 }
 
 async function executerActionBasique(userId, result, messageOriginal, userState) {
@@ -1293,16 +1345,53 @@ async function gererMessageIntelligent(userId, message) {
 
   console.log(`🤖 Message intelligent: "${message}" (état: ${userState.step})`);
 
-  // 1. Vérifier d'abord les remerciements et suivi (nécessaire pour les états post-commande)
+  // 1. Vérifier d'abord les remerciements et suivi
   const traiteRemerciement = await gererRemerciementsEtSuivi(userId, message, userState);
   if (traiteRemerciement) {
     return;
   }
 
-  // 2. UTILISER LE CERVEAU GROQ POUR TOUT COMPRENDRE NATURELLEMENT
+  // 2. Détection de mots-clés critiques pour interruption
+  const motsInterruption = ['stop', 'annuler', 'recommencer', 'autre chose', 'changer', 'non'];
+
+  const estInterruption = motsInterruption.some(mot => texte.includes(mot));
+
+  if (estInterruption && userState.step !== 'MENU_PRINCIPAL') {
+    console.log(`🛑 Interruption demandée, réinitialisation`);
+    userState.step = 'MENU_PRINCIPAL';
+    userState.attenteMedicament = false;
+    userState.attenteCommande = false;
+    userState.panier = [];
+    await sendWhatsAppMessage(userId,
+      "✅ Parfait ! Recommençons. Comment puis-je vous aider ?\n\n" +
+      "💊 Médicaments | 🏥 Pharmacies | 👨‍⚕️ Cliniques | 📅 Rendez-vous"
+    );
+    userStates.set(userId, userState);
+    return;
+  }
+
+  // 3. Vérifier si l'utilisateur répète la même demande
+  const derniersMessages = userState.historiqueMessages?.slice(-3) || [];
+  const repetitions = derniersMessages.filter(m =>
+    m.message.toLowerCase().includes(texte.substring(0, 10))).length;
+
+  if (repetitions > 1) {
+    console.log(`🔄 Répétition détectée, clarification`);
+    await sendWhatsAppMessage(userId,
+      "Je vois que vous insistez sur ce point. Laissez-moi vous aider autrement.\n\n" +
+      "Souhaitez-vous :\n" +
+      "1. Voir à nouveau les options ?\n" +
+      "2. Parler à un conseiller ?\n" +
+      "3. Changer de sujet ?\n\n" +
+      "Dites simplement ce que vous préférez."
+    );
+    return;
+  }
+
+  // 4. Utiliser le cerveau Groq pour analyse contextuelle
   await comprendreEtAgir(userId, message);
 
-  // 3. Mettre à jour l'historique
+  // 5. Mettre à jour l'historique
   if (!userState.historiqueMessages) {
     userState.historiqueMessages = [];
   }
@@ -1342,7 +1431,7 @@ function extraireNomMedicament(message) {
   // Extraction par regex pour les noms génériques
   const regexMedicament = /\b(?:paracétamol|ibuprofène|amoxicilline|aspirine|doliprane|advil)\b/i;
   const match = texte.match(regexMedicament);
-  
+
   return match ? match[0].toLowerCase() : null;
 }
 
@@ -1575,20 +1664,8 @@ async function traiterCommandeMedicament(userId, message, userState) {
 // =================== GESTION DES PHARMACIES ===================
 async function afficherPharmaciesDeGarde(userId) {
   try {
-    const userState = userStates.get(userId) || DEFAULT_STATE;
-    
-    // Réinitialiser l'état pour éviter les conflits
-    userState.step = 'MENU_PRINCIPAL';
-    userState.attenteMedicament = false;
-    userState.attenteCommande = false;
-    userStates.set(userId, userState);
-    
-    await sendWhatsAppMessage(userId, "🔍 Recherche des pharmacies de garde disponibles aujourd'hui...");
+    await sendWhatsAppMessage(userId, "🔍 Recherche des pharmacies de garde...");
 
-    const maintenant = new Date();
-    const heure = maintenant.getHours();
-    const estNuit = heure >= 22 || heure < 6;
-    
     const snapshot = await db.collection('pharmacies')
       .where('estDeGarde', '==', true)
       .where('estOuvert', '==', true)
@@ -1598,48 +1675,35 @@ async function afficherPharmaciesDeGarde(userId) {
     if (snapshot.empty) {
       await sendWhatsAppMessage(
         userId,
-        "🌙 **Pharmacies de garde - San Pedro**\n\n" +
         "❌ Aucune pharmacie de garde trouvée pour le moment.\n\n" +
-        (estNuit ? "⚠️ Il est actuellement tard. Les pharmacies de nuit peuvent être limitées.\n\n" : "") +
-        "📞 **Contactez le support :**\n" +
-        `${CONFIG.SUPPORT_PHONE}\n\n` +
-        "💊 Vous pouvez aussi commander des médicaments qui seront livrés directement."
+        "📞 Contactez le support au " + CONFIG.SUPPORT_PHONE + "\n\n" +
+        "📍 Service uniquement à San Pedro"
       );
       return;
     }
 
-    let message = `🏥 **Pharmacies de garde - San Pedro**\n`;
-    message += estNuit ? "🌙 **Service de nuit**\n\n" : "\n\n";
+    let message = "🏥 Pharmacies de garde - San Pedro\n\n";
 
     snapshot.docs.forEach((doc, index) => {
       const pharmacie = doc.data();
-      message += `${index + 1}. **${pharmacie.nom || 'Pharmacie'}**\n`;
-      message += `   📍 ${pharmacie.adresse || 'San Pedro'}\n`;
+      message += `${index + 1}. ${pharmacie.nom || 'Pharmacie'}\n`;
+      message += `   ${pharmacie.adresse || 'San Pedro'}\n`;
       message += `   📞 ${pharmacie.telephone || 'Non disponible'}\n`;
       message += `   ⏰ ${pharmacie.horaires || '24h/24'}\n\n`;
     });
 
-    message += "💡 **Conseils :**\n";
-    message += "• Présentez votre ordonnance si nécessaire\n";
-    message += "• Vérifiez les horaires avant de vous déplacer\n";
-    message += "• En cas d'urgence, appelez le 144\n\n";
-    
-    message += "💊 **Alternative : Commandez en ligne**\n";
-    message += "Écrivez le nom d'un médicament pour le faire livrer.\n\n";
-    
-    message += "📞 **Support :** " + CONFIG.SUPPORT_PHONE;
+    message += "💊 Pour commander des médicaments :\n";
+    message += "Écrivez simplement le nom du médicament\n\n";
+    message += "📞 Support : " + CONFIG.SUPPORT_PHONE;
 
     await sendWhatsAppMessage(userId, message);
 
   } catch (error) {
-    console.error('❌ Erreur pharmacies de garde:', error.message);
+    console.error('❌ Erreur pharmacies:', error.message);
     await sendWhatsAppMessage(
       userId,
-      "❌ Désolé, je ne peux pas accéder à la liste des pharmacies pour le moment.\n\n" +
-      "💊 **Solutions alternatives :**\n" +
-      "1. Commandez des médicaments en écrivant leur nom\n" +
-      "2. Contactez le support au " + CONFIG.SUPPORT_PHONE + "\n" +
-      "3. Réessayez dans quelques minutes"
+      "❌ Erreur recherche pharmacies.\n\n" +
+      "📞 Contactez le support : " + CONFIG.SUPPORT_PHONE
     );
   }
 }
@@ -1974,8 +2038,9 @@ async function finaliserRendezVous(userId, telephone, userState) {
       `• Dites "suivi rdv" ou "statut rendez-vous"\n` +
       `• Dites "merci" pour confirmer\n` +
       `• Dites "autre" pour une nouvelle demande\n\n` +
-      `🔢 **Référence :** ${rdvReference}\n` +
-      `📞 Support : ${CONFIG.SUPPORT_PHONE}`
+      `📞 **Support & suivi :**\n` +
+      `${CONFIG.SUPPORT_PHONE}\n` +
+      `🔢 **Référence :** ${rdvReference}`
     );
 
     // Enregistrer l'état "après rendez-vous"
@@ -2516,18 +2581,18 @@ async function sendConfirmationFinale(userId, userState, commande, numeroCommand
   message += `4. 🏠 Livraison à votre adresse\n\n`;
 
   message += `⏰ **Délai estimé :** 45-60 minutes\n\n`;
-  
+
   message += `📱 **Pour suivre votre commande :**\n`;
   message += `• Dites "suivi" ou "où en est ma commande ?"\n`;
   message += `• Dites "merci" pour confirmer\n`;
   message += `• Dites "autre" pour une nouvelle demande\n\n`;
-  
+
   message += `📞 **Support & suivi :**\n`;
   message += `${CONFIG.SUPPORT_PHONE}\n`;
   message += `🔢 **Référence :** ${numeroCommande}`;
 
   await sendWhatsAppMessage(userId, message);
-  
+
   // Enregistrer l'état "après commande"
   userState.apresCommande = true;
   userState.derniereCommandeRef = numeroCommande;
@@ -2575,18 +2640,18 @@ async function sendConfirmationFinaleMulti(userId, userState, commande, numeroCo
   message += `4. 🏠 Livraison à votre adresse\n\n`;
 
   message += `⏰ **Délai estimé :** 45-60 minutes\n\n`;
-  
+
   message += `📱 **Pour suivre votre commande :**\n`;
   message += `• Dites "suivi" ou "où en est ma commande ?"\n`;
   message += `• Dites "merci" pour confirmer\n`;
   message += `• Dites "autre" pour une nouvelle demande\n\n`;
-  
+
   message += `📞 **Support & suivi :**\n`;
   message += `${CONFIG.SUPPORT_PHONE}\n`;
   message += `🔢 **Référence :** ${numeroCommande}`;
 
   await sendWhatsAppMessage(userId, message);
-  
+
   // Enregistrer l'état "après commande"
   userState.apresCommande = true;
   userState.derniereCommandeRef = numeroCommande;
@@ -2683,69 +2748,84 @@ app.post('/api/webhook', async (req, res) => {
 
         // Traitement avec verrou
         await withUserLock(userId, async () => {
-          // SEULEMENT 2 CAS SPÉCIFIQUES GÉRÉS DIRECTEMENT :
-          
-          // 1. États de collecte d'informations (nécessaires pour le processus)
+          // VÉRIFIER D'ABORD LES REMERCIEMENTS ET SUIVI
+          const traiteRemerciement = await gererRemerciementsEtSuivi(userId, text, userState);
+          if (traiteRemerciement) {
+            return;
+          }
+
+          // États de collecte d'informations
           if (userState.step === 'ATTENTE_NOM' ||
               userState.step === 'ATTENTE_QUARTIER' ||
               userState.step === 'ATTENTE_WHATSAPP' ||
-              userState.step === 'ATTENTE_INDICATIONS' ||
-              userState.step === 'ATTENTE_NOM_MULTI' ||
+              userState.step === 'ATTENTE_INDICATIONS') {
+            await collecterInfosLivraison(userId, text, userState);
+            return;
+          }
+
+          if (userState.step === 'ATTENTE_NOM_MULTI' ||
               userState.step === 'ATTENTE_QUARTIER_MULTI' ||
               userState.step === 'ATTENTE_WHATSAPP_MULTI' ||
               userState.step === 'ATTENTE_INDICATIONS_MULTI') {
-            
-            if (userState.step.includes('MULTI')) {
-              await collecterInfosLivraisonMulti(userId, text, userState);
-            } else {
-              await collecterInfosLivraison(userId, text, userState);
-            }
+            await collecterInfosLivraisonMulti(userId, text, userState);
             return;
           }
-          
-          // 2. États de rendez-vous (processus spécifique)
-          if (userState.attenteSpecialiteRdv ||
-              userState.attenteSelectionCliniqueRdv ||
-              userState.attenteDateRdv ||
-              userState.attenteHeureRdv ||
-              userState.attenteNomRdv ||
-              userState.attenteTelephoneRdv) {
-            
-            await gererPriseRendezVous(userId, text);
-            return;
-          }
-          
-          // 3. Gestion du panier (commandes spécifiques)
+
+          // Gestion du panier
           const resultatPanier = await gestionPanier.gererMessage(userId, text, userState);
           if (resultatPanier !== null) {
             return;
           }
-          
-          // 4. Commande de médicament (après recherche)
-          if (userState.attenteCommande && userState.listeMedicamentsAvecIndex) {
-            await traiterCommandeMedicament(userId, text, userState);
-            return;
-          }
-          
-          // 5. Recherche par image
+
+          // Vérifier états spéciaux
           if (userState.attenteMedicamentImage) {
             await rechercherEtAfficherMedicament(userId, text);
             userState.attenteMedicamentImage = false;
             userStates.set(userId, userState);
             return;
           }
-          
-          // 6. Demande directe de médicament
+
           if (userState.attenteMedicament) {
             await rechercherEtAfficherMedicament(userId, text);
             userState.attenteMedicament = false;
             userStates.set(userId, userState);
             return;
           }
-          
-          // TOUT LE RESTE : LAISSER GROQ COMPRENDRE NATURELLEMENT
+
+          if (userState.attenteCommande && userState.listeMedicamentsAvecIndex) {
+            await traiterCommandeMedicament(userId, text, userState);
+            return;
+          }
+
+          // États de rendez-vous
+          if (userState.attenteSpecialiteRdv ||
+              userState.attenteSelectionCliniqueRdv ||
+              userState.attenteDateRdv ||
+              userState.attenteHeureRdv ||
+              userState.attenteNomRdv ||
+              userState.attenteTelephoneRdv) {
+
+            await gererPriseRendezVous(userId, text);
+            return;
+          }
+
+          // UTILISER LA GESTION INTELLIGENTE POUR TOUT LE RESTE
           await gererMessageIntelligent(userId, text);
-          
+
+          // Mettre à jour historique
+          if (!userState.historiqueMessages) {
+            userState.historiqueMessages = [];
+          }
+          userState.historiqueMessages.push({
+            message: text,
+            timestamp: new Date().toISOString()
+          });
+
+          // Limiter historique
+          if (userState.historiqueMessages.length > 20) {
+            userState.historiqueMessages = userState.historiqueMessages.slice(-20);
+          }
+
           userStates.set(userId, userState);
         });
 
@@ -2880,11 +2960,11 @@ app.listen(PORT, HOST, () => {
 📞 Support: ${CONFIG.SUPPORT_PHONE}
 =======================================================
 ✅ PRÊT À RECEVOIR DES MESSAGES !
-✅ GROQ comme cerveau principal pour conversations naturelles
-✅ Compréhension contextuelle des changements de sujet
-✅ Détection des remerciements et suivi
+✅ Gestion intelligente du contexte
+✅ Compréhension des changements de sujet
+✅ Détection des besoins urgents
 ✅ Réponses naturelles et empathiques
-✅ Processus transactionnels optimisés
+✅ Processus de livraison optimisé
 =======================================================
   `);
 });
