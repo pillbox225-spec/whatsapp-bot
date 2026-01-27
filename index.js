@@ -58,7 +58,7 @@ const CONFIG = {
   WHATSAPP_TOKEN: process.env.WHATSAPP_TOKEN,
   GROQ_API_KEY: process.env.GROQ_API_KEY,
   GROQ_MODEL: "llama-3.1-8b-instant",
-  SUPPORT_PHONE: "+2250701406868",
+  SUPPORT_PHONE: process.env.SUPPORT_PHONE || "+225XXXXXXXXX",
   LIVRAISON_JOUR: 400,
   LIVRAISON_NUIT: 600
 };
@@ -292,11 +292,10 @@ class GestionnaireContexte {
   }
 
   enregistrerMedicamentsMentionnes(texte, userState) {
-    const medicamentsConnus = [
-      'paracétamol', 'paracetamol', 'doliprane', 'ibuprofène', 'advil', 'amoxicilline',
-      'vitamine c', 'aspirine', 'ventoline', 'insuline', 'sirop', 'metronidazole'
-    ];
-
+    // Cette fonction ne contient plus de médicaments fictifs
+    // Elle utilisera uniquement ceux de la base de données
+    const medicamentsConnus = []; // Vide car on utilisera la base de données
+    
     medicamentsConnus.forEach(medicament => {
       if (texte.includes(medicament)) {
         if (!userState.contexte.medical.medicamentsRecherches.includes(medicament)) {
@@ -1157,27 +1156,24 @@ async function executerActionReelle(userId, result, messageOriginal, userState) 
 
 // =================== FONCTIONS D'EXTRACTION ===================
 function extraireNomMedicament(texte) {
-  const medicamentsAlias = {
-    'paracetamol': ['paracetamol', 'paracétamol', 'paracetemol', 'paracetamol', 'paracetamol', 'doliprane', 'dolipran', 'doliprene'],
-    'ibuprofene': ['ibuprofène', 'ibuprofene', 'ibuprofen', 'advil'],
-    'amoxicilline': ['amoxicilline', 'amoxiciline', 'amoxicilin', 'clamoxyl', 'augmentin'],
-    'aspirine': ['aspirine', 'aspirin', 'aspegic'],
-    'vitamine c': ['vitamine c', 'vitaminec', 'vit c'],
-    'sirop': ['sirop', 'sirop contre la toux', 'toux'],
-    'metronidazole': ['metronidazole', 'metronidazol', 'flagyl']
-  };
-
+  // Cette fonction ne contient plus de médicaments fictifs
+  // Elle extraira simplement le terme de recherche
   const texteLower = texte.toLowerCase();
-
-  for (const [medicamentBase, aliases] of Object.entries(medicamentsAlias)) {
-    for (const alias of aliases) {
-      if (texteLower.includes(alias)) {
-        return medicamentBase;
-      }
+  
+  // Recherche de termes médicaux génériques
+  const termesMedicaux = [
+    'paracetamol', 'paracétamol', 'ibuprofène', 'amoxicilline',
+    'aspirine', 'vitamine', 'sirop', 'médicament', 'comprimé',
+    'gélule', 'suspension', 'injection', 'pommade', 'crème'
+  ];
+  
+  for (const terme of termesMedicaux) {
+    if (texteLower.includes(terme)) {
+      return terme;
     }
   }
-
-  return null;
+  
+  return texteLower;
 }
 
 function extrairePharmacieSpecifique(texte) {
@@ -2546,12 +2542,15 @@ async function gererPriseRendezVous(userId, message) {
     
     await sendWhatsAppMessage(userId, "Quel est votre numéro de téléphone ?");
   } else if (userState.attenteTelephoneRdv) {
+    // CORRECTION DE L'ERREUR DE SYNTAXE ICI
+    const telephone = message;
+    
     // Créer le rendez-vous
-    await creerRendezVousFirestore(userId, userState);
+    await creerRendezVousFirestore(userId, userState, telephone);
   }
 }
 
-async function creerRendezVousFirestore(userId, userState) {
+async function creerRendezVousFirestore(userId, userState, telephone) {
   try {
     const rdvRef = db.collection('rendez_vous').doc();
     const maintenant = new Date();
@@ -2559,7 +2558,7 @@ async function creerRendezVousFirestore(userId, userState) {
     await rdvRef.set({
       patientId: userId,
       patientNom: userState.nomRdv,
-      patientTelephone: userState.attenteTelephoneRdv ? userState.attenteTelephoneRdv : message,
+      patientTelephone: telephone,
       centreSanteId: userState.cliniqueSelectionneeRdv.id,
       centreSanteNom: userState.cliniqueSelectionneeRdv.nom,
       medecinId: null, // À définir selon la logique métier
