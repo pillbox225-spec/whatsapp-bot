@@ -2530,7 +2530,7 @@ async function gererPriseRendezVous(userId, message) {
     userState.attenteHeureRdv = true;
     userStates.set(userId, userState);
     
-    await sendWhatsAppMessage(userId, "Quelle heure souhaitez-vous ? (Exemple: "14:30")");
+    await sendWhatsAppMessage(userId, "Quelle heure souhaitez-vous ? (Exemple: 14:30)");
   } else if (userState.attenteHeureRdv) {
     userState.heureRdv = message;
     userState.attenteHeureRdv = false;
