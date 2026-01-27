@@ -294,7 +294,7 @@ class GestionnaireContexte {
   enregistrerMedicamentsMentionnes(texte, userState) {
     const medicamentsConnus = [
       'paracétamol', 'paracetamol', 'doliprane', 'ibuprofène', 'advil', 'amoxicilline',
-      'vitamine c', 'aspirine', 'ventoline', 'insuline', 'sirop'
+      'vitamine c', 'aspirine', 'ventoline', 'insuline', 'sirop', 'metronidazole'
     ];
 
     medicamentsConnus.forEach(medicament => {
@@ -651,6 +651,8 @@ class GestionPanier {
       `✅ Panier finalisé\n\n` +
       `Votre commande (${panier.length} médicament(s)) :\n\n` +
       this.formaterPanier(panier) + `\n` +
+      `🏥 Pharmacie: ${panier[0].pharmacieNom}\n` +
+      `🚚 Frais de livraison: ${fraisLivraison} FCFA\n` +
       `💵 TOTAL : ${total} FCFA\n\n` +
       (ordonnanceRequise ?
         `📄 Ordonnance requise. Envoyez la photo de votre ordonnance.` :
@@ -1139,7 +1141,8 @@ function extraireNomMedicament(texte) {
     'amoxicilline': ['amoxicilline', 'amoxiciline', 'amoxicilin', 'clamoxyl', 'augmentin'],
     'aspirine': ['aspirine', 'aspirin', 'aspegic'],
     'vitamine c': ['vitamine c', 'vitaminec', 'vit c'],
-    'sirop': ['sirop', 'sirop contre la toux', 'toux']
+    'sirop': ['sirop', 'sirop contre la toux', 'toux'],
+    'metronidazole': ['metronidazole', 'metronidazol', 'flagyl']
   };
 
   const texteLower = texte.toLowerCase();
@@ -1228,8 +1231,10 @@ async function rechercherMedicamentReel(userId, nomMedicament, pharmacieSpecifiq
       const sousTitre = (medicament.sousTitre || '').toLowerCase();
 
       // Correspondance flexible (contient le terme dans nom OU sous-titre)
-      if (nomMed.includes(termeRecherche) || sousTitre.includes(termeRecherche) ||
-          termeRecherche.includes(nomMed) || termeRecherche.includes(sousTitre)) {
+      if (nomMed.includes(termeRecherche) ||
+          sousTitre.includes(termeRecherche) ||
+          termeRecherche.includes(nomMed) ||
+          termeRecherche.includes(sousTitre)) {
         medicamentsFiltres.push(medicament);
       }
     });
@@ -2110,6 +2115,8 @@ async function confirmerInfosLivraison(userId, userState) {
     message += `   ${item.prixUnitaire} FCFA × ${item.quantite} = ${item.prixUnitaire * item.quantite} FCFA\n\n`;
   });
 
+  message += `🏥 Pharmacie: ${panier[0].pharmacieNom}\n`;
+  message += `🚚 Frais de livraison: ${getFraisLivraison()} FCFA\n`;
   message += `💵 TOTAL: ${commande.total} FCFA\n\n`;
   message += `Confirmez-vous cette commande ?\n`;
   message += `"oui" pour confirmer\n`;
@@ -2137,6 +2144,8 @@ async function confirmerInfosLivraisonMulti(userId, userState) {
     message += `   ${item.prixUnitaire} FCFA × ${item.quantite} = ${item.prixUnitaire * item.quantite} FCFA\n\n`;
   });
 
+  message += `🏥 Pharmacie: ${panier[0].pharmacieNom}\n`;
+  message += `🚚 Frais de livraison: ${getFraisLivraison()} FCFA\n`;
   message += `💵 TOTAL: ${commande.total} FCFA\n\n`;
   message += `Confirmez-vous cette commande ?\n`;
   message += `"oui" pour confirmer\n`;
@@ -2297,6 +2306,8 @@ async function sendConfirmationFinale(userId, userState, commande, numeroCommand
     message += `   ${item.prixUnitaire} FCFA × ${item.quantite} = ${item.prixUnitaire * item.quantite} FCFA\n\n`;
   });
 
+  message += `🏥 Pharmacie: ${panier[0].pharmacieNom}\n`;
+  message += `🚚 Frais de livraison: ${getFraisLivraison()} FCFA\n`;
   message += `💵 TOTAL: ${commande.total} FCFA\n\n`;
   message += `📍 Livraison à: ${commande.quartier}\n`;
   message += `📞 Votre numéro: ${commande.whatsapp}\n\n`;
@@ -2373,7 +2384,7 @@ async function afficherDetailCommande(userId, message, userState) {
     message += `📅 Date: ${new Date(commande.date_commande.seconds * 1000).toLocaleString('fr-FR')}\n`;
     message += `💰 Total: ${commande.paiement.montant_total} FCFA\n`;
     message += `📍 Adresse: ${commande.livraison.adresse}\n`;
-    message += `📦 Statut: ${this.getStatutLivraison(commande.livraison.statut_livraison)}\n\n`;
+    message += `📦 Statut: ${gestionPanier.getStatutLivraison(commande.livraison.statut_livraison)}\n\n`;
     message += `💊 Médicaments:\n\n`;
 
     commande.articles.forEach((article, index) => {
