@@ -58,7 +58,7 @@ const CONFIG = {
   WHATSAPP_TOKEN: process.env.WHATSAPP_TOKEN,
   GROQ_API_KEY: process.env.GROQ_API_KEY,
   GROQ_MODEL: "llama-3.1-8b-instant",
-  SUPPORT_PHONE: process.env.SUPPORT_PHONE || "",
+  SUPPORT_PHONE: process.env.SUPPORT_PHONE || "2250701406880",
   LIVRAISON_JOUR: 400,
   LIVRAISON_NUIT: 600
 };
@@ -138,7 +138,7 @@ class GestionnaireContexte {
     // Extraire infos profil
     this.extraireInformationsProfil(texte, userState);
 
-    // Enregistrer médicaments mentionnés (uniquement ceux qui existent)
+    // Enregistrer médicaments mentionnés
     await this.enregistrerMedicamentsMentionnes(texte, userState);
 
     // Détecter confusion
@@ -195,15 +195,9 @@ class GestionnaireContexte {
     // Ponctuation
     const pointsExclamation = (texte.match(/!/g) || []).length;
     const pointsInterrogation = (texte.match(/\?/g) || []).length;
-    const majuscules = (texte.match(/[A-Z]/g) || []).length;
 
     urgence += pointsExclamation * 0.5;
     stress += pointsInterrogation * 0.3;
-
-    if (majuscules > texte.length * 0.2) {
-      urgence += 1;
-      stress += 1;
-    }
 
     // Mettre à jour
     userState.contexte.emotionnel.urgenceNiveau =
@@ -293,7 +287,6 @@ class GestionnaireContexte {
 
   async enregistrerMedicamentsMentionnes(texte, userState) {
     try {
-      // Vérifier dans la base de données si le texte contient des noms de médicaments réels
       const medicamentsSnapshot = await db.collection('medicaments')
         .where('stock', '>', 0)
         .limit(50)
@@ -307,7 +300,6 @@ class GestionnaireContexte {
         };
       });
 
-      // Chercher si le texte contient un nom de médicament existant
       for (const med of medicamentsExistants) {
         if (med.nom && texte.includes(med.nom.toLowerCase())) {
           if (!userState.contexte.medical.medicamentsRecherches.includes(med.nom)) {
@@ -382,7 +374,7 @@ class GestionnaireContexte {
       resume += `**Dernier médicament mentionné:** ${ctx.medical.dernierMedicamentMentionne}\n`;
     }
 
-    // Contexte récent (derniers 2 échanges)
+    // Contexte récent
     if (ctx.historiqueConversation.length > 1) {
       const derniersMessages = ctx.historiqueConversation
         .slice(-4)
@@ -589,7 +581,6 @@ class GestionPanier {
 
   async afficherHistoriqueCommandes(userId, userState) {
     try {
-      // REQUÊTE SIMPLIFIÉE sans filtre complexe
       const snapshot = await db.collection('commandes_medicales')
         .where('clientId', '==', userId)
         .orderBy('date_commande', 'desc')
@@ -601,7 +592,7 @@ class GestionPanier {
         return;
       }
 
-      // Filtrer localement pour exclure les commandes supprimées/annulées
+      // Filtrer localement
       const commandesValides = snapshot.docs.filter(doc => {
         const commande = doc.data();
         return commande.statut !== 'supprime' && commande.statut !== 'annule';
@@ -624,22 +615,18 @@ class GestionPanier {
         message += `   📍 ${commande.livraison.adresse}\n`;
         message += `   📦 Statut: ${this.getStatutLivraison(commande.livraison.statut_livraison)}\n`;
         
-        // Ajouter nom du livreur s'il existe
         if (commande.livraison.livreurNom) {
           message += `   👨‍🚀 Livreur: ${commande.livraison.livreurNom}\n`;
         }
         
-        // Ajouter numéro du livreur s'il existe
         if (commande.livraison.livreurTelephone) {
           message += `   📞 Livreur: ${commande.livraison.livreurTelephone}\n`;
         }
         
-        // Ajouter pharmacie concernée
         if (commande.pharmacienom) {
           message += `   🏥 Pharmacie: ${commande.pharmacienom}\n`;
         }
         
-        // Ajouter prix de livraison
         const prixLivraison = commande.paiement.montant_total - 
           commande.articles.reduce((sum, article) => sum + (article.prix_unitaire * article.quantite), 0);
         message += `   🚚 Livraison: ${prixLivraison} FCFA\n`;
@@ -691,7 +678,6 @@ class GestionPanier {
 
     const { sousTotal, fraisLivraison, total } = this.calculerTotal(panier);
 
-    // Vérifier si ordonnance requise
     const ordonnanceRequise = panier.some(item => item.necessiteOrdonnance);
 
     await sendWhatsAppMessage(
@@ -712,7 +698,6 @@ class GestionPanier {
         `Commencez par votre nom :`)
     );
 
-    // Sauvegarder la commande
     userState.commandeEnCours = {
       panier: panier,
       sousTotal: sousTotal,
@@ -894,7 +879,6 @@ async function withUserLock(userId, callback) {
   try {
     return await callback();
   } finally {
-    // Libérer le verrou après 30 secondes maximum
     setTimeout(() => {
       if (processingLocks.get(userId) === Date.now() - processingLocks.get(userId) > 30000) {
         processingLocks.delete(userId);
@@ -913,6 +897,9 @@ function getFraisLivraison() {
 // =================== COMMUNICATION WHATSAPP ===================
 async function sendWhatsAppMessage(to, text) {
   try {
+    // LOG AJOUTÉ ICI
+    console.log(`📤 Envoi WhatsApp à ${to}: "${text.substring(0, 100)}${text.length > 100 ? '...' : ''}"`);
+    
     const response = await axios.post(
       `https://graph.facebook.com/v19.0/${CONFIG.PHONE_NUMBER_ID}/messages`,
       {
@@ -930,6 +917,10 @@ async function sendWhatsAppMessage(to, text) {
         timeout: 10000
       }
     );
+    
+    // LOG AJOUTÉ ICI
+    console.log(`✅ Message envoyé avec ID: ${response.data.messages?.[0]?.id}`);
+    
     return response.data.messages?.[0]?.id;
   } catch (error) {
     console.error('❌ Erreur envoi WhatsApp:', error.response?.data || error.message);
@@ -965,7 +956,9 @@ async function comprendreEtAgir(userId, message) {
   console.log(`🧠 Analyse intelligente: "${message}"`);
   const userState = userStates.get(userId) || { ...DEFAULT_STATE };
 
-  // Détection spéciale pour les demandes de médicaments sans nom précis
+  // LOG AJOUTÉ ICI
+  console.log(`👤 État utilisateur: step=${userState.step}, attenteMedicament=${userState.attenteMedicament}`);
+
   const texte = message.toLowerCase();
   const estDemandeGeneriqueMedicament = (
     (texte.includes('acheter') || texte.includes('commander') || texte.includes('médicament') || texte.includes('veux')) &&
@@ -1169,7 +1162,10 @@ Maintenant, analyse ce message utilisateur et réponds en JSON :
     );
 
     const result = JSON.parse(response.data.choices[0].message.content);
-    console.log('🧠 Résultat analyse:', JSON.stringify(result));
+    
+    // LOG AJOUTÉ ICI
+    console.log('🧠 Résultat analyse:', JSON.stringify(result, null, 2));
+    console.log(`📨 Réponse à envoyer: ${result.reponse.substring(0, 150)}`);
 
     // Envoyer la réponse intelligente
     await sendWhatsAppMessage(userId, result.reponse);
@@ -1184,6 +1180,8 @@ Maintenant, analyse ce message utilisateur et réponds en JSON :
 
   } catch (error) {
     console.error('❌ Erreur analyse intelligente:', error.message);
+    console.error('📋 Stack trace:', error.stack);
+    
     // Réponse de secours sans dépendre à GROQ
     const reponseSecours = genererReponseSecours(message);
     await sendWhatsAppMessage(userId, reponseSecours);
@@ -1209,20 +1207,19 @@ function estNomMedicamentProbable(texte) {
   
   // Chercher des patterns qui ressemblent à des noms de médicaments
   const patternsMedicaments = [
-    // Patterns communs pour les noms de médicaments
-    /[a-z]+c?[aeiou]x?[a-z]*line$/i, // finissant par -line (amoxicilline, etc.)
-    /[a-z]+c?[aeiou]x?[a-z]*ol$/i,   // finissant par -ol (paracétamol, etc.)
-    /[a-z]+c?[aeiou]x?[a-z]*ine$/i,  // finissant par -ine (vitamine, etc.)
-    /[a-z]+c?[aeiou]x?[a-z]*azole$/i, // finissant par -azole (metronidazole, etc.)
-    /[a-z]+c?[aeiou]x?[a-z]*profen$/i, // finissant par -profen (ibuprofène, etc.)
-    /vitamine\s+[a-z]/i,             // vitamine + lettre
-    /sirop/i,                        // contient sirop
-    /comprimé/i,                     // contient comprimé
-    /gélule/i,                       // contient gélule
-    /pommade/i,                      // contient pommade
-    /crème/i,                        // contient crème
-    /suspension/i,                   // contient suspension
-    /injection/i                     // contient injection
+    /[a-z]+c?[aeiou]x?[a-z]*line$/i,
+    /[a-z]+c?[aeiou]x?[a-z]*ol$/i,
+    /[a-z]+c?[aeiou]x?[a-z]*ine$/i,
+    /[a-z]+c?[aeiou]x?[a-z]*azole$/i,
+    /[a-z]+c?[aeiou]x?[a-z]*profen$/i,
+    /vitamine\s+[a-z]/i,
+    /sirop/i,
+    /comprimé/i,
+    /gélule/i,
+    /pommade/i,
+    /crème/i,
+    /suspension/i,
+    /injection/i
   ];
   
   // Extraire les mots du texte
@@ -1282,7 +1279,9 @@ async function executerActionReelle(userId, result, messageOriginal, userState) 
   const parametres = result.parametres || {};
   const texteOriginal = messageOriginal.toLowerCase();
 
+  // LOG AJOUTÉ ICI
   console.log(`🤖 Exécution action: ${action}`);
+  console.log(`📝 Réponse IA: "${result.reponse.substring(0, 100)}${result.reponse.length > 100 ? '...' : ''}"`);
 
   // Réinitialiser les états inutiles quand on change de sujet
   if (action === 'AFFICHER_PHARMACIES_GARDE' || action === 'AFFICHER_CLINIQUES' || action === 'PRENDRE_RDV') {
@@ -1344,7 +1343,6 @@ async function executerActionReelle(userId, result, messageOriginal, userState) 
     userStates.set(userId, userState);
 
   } else if (action === 'GESTION_PANIER') {
-    // Laisser la logique de panier gérer
     userStates.set(userId, userState);
   }
 }
@@ -1353,7 +1351,6 @@ async function executerActionReelle(userId, result, messageOriginal, userState) 
 function extraireNomMedicament(texte) {
   const texteLower = texte.toLowerCase();
   
-  // Si c'est une demande générique, retourner null
   const motsGeneriques = ['médicament', 'medicament', 'acheter', 'commander', 'veux', 'vouloir'];
   const estDemandeGenerique = motsGeneriques.some(mot => texteLower.includes(mot)) && 
                               (texteLower.includes('quel') || texteLower.includes('quoi') || texteLower.includes('nom'));
@@ -1362,23 +1359,19 @@ function extraireNomMedicament(texte) {
     return null;
   }
   
-  // Chercher des mots qui pourraient être des noms de médicaments
   const mots = texteLower.split(/\s+/).filter(mot => mot.length > 3);
   
-  // Exclure les mots communs
   const motsExclus = ['pharmacie', 'clinique', 'docteur', 'médecin', 'hôpital', 'santé', 'malade', 
                       'douleur', 'fièvre', 'toux', 'fatigue', 'nausée', 'diarrhée'];
   
   for (const mot of mots) {
     if (motsExclus.includes(mot)) continue;
     
-    // Si le mot a l'air d'un nom de médicament (basé sur des patterns)
     if (/(.*(ol|ine|line|azole|mycine|pine|pril|idine|sine|profen)$)/i.test(mot)) {
       return mot;
     }
   }
   
-  // Si on arrive ici, on considère que c'est peut-être un nom de médicament
   return mots.length > 0 ? mots[0] : null;
 }
 
@@ -1454,7 +1447,7 @@ async function rechercherMedicamentReel(userId, nomMedicament, pharmacieSpecifiq
       const nomMed = (medicament.nom || '').toLowerCase();
       const sousTitre = (medicament.sousTitre || '').toLowerCase();
 
-      // Correspondance flexible (contient le terme dans nom OU sous-titre)
+      // Correspondance flexible
       if (nomMed.includes(termeRecherche) ||
           sousTitre.includes(termeRecherche) ||
           termeRecherche.includes(nomMed) ||
@@ -1577,7 +1570,9 @@ async function gererMessageNaturel(userId, message) {
   const userState = userStates.get(userId) || { ...DEFAULT_STATE };
   const texte = message.toLowerCase().trim();
 
+  // LOG AJOUTÉ ICI
   console.log(`💬 Message: "${message}"`);
+  console.log(`📊 État: ${userState.step}, Panier: ${userState.panier?.length || 0} items`);
 
   // Détection de remerciement - RÉINITIALISATION
   if (texte.includes('merci')) {
@@ -1621,7 +1616,12 @@ async function gererMessageNaturel(userId, message) {
   }
 
   // UTILISER GROQ pour analyser
-  await comprendreEtAgir(userId, message);
+  const result = await comprendreEtAgir(userId, message);
+  
+  // LOG AJOUTÉ ICI
+  if (result) {
+    console.log(`✅ Réponse IA envoyée pour "${message.substring(0, 50)}..."`);
+  }
 
   // Mettre à jour historique
   if (!userState.historiqueMessages) {
@@ -1979,9 +1979,13 @@ app.get('/api/webhook', (req, res) => {
 
 app.post('/api/webhook', async (req, res) => {
   console.log('📩 Webhook POST reçu');
+  console.log('📦 Body:', JSON.stringify(req.body, null, 2).substring(0, 500));
 
   // Répondre immédiatement
   res.status(200).send('EVENT_RECEIVED');
+
+  // LOG AJOUTÉ ICI
+  console.log('✅ Réponse 200 envoyée au webhook');
 
   // Traiter le message en arrière-plan
   setImmediate(async () => {
@@ -2134,6 +2138,7 @@ app.post('/api/webhook', async (req, res) => {
 
     } catch (error) {
       console.error('💥 ERREUR WEBHOOK:', error.message);
+      console.error('📋 Stack trace:', error.stack);
     }
   });
 });
@@ -2276,14 +2281,12 @@ async function traiterConfirmationCommande(userId, message, userState) {
   const texte = message.toLowerCase().trim();
 
   if (texte === 'oui' || texte === 'confirmer') {
-    // Créer la commande
     const commande = userState.commandeEnCours;
     const numeroCommande = uuidv4().substring(0, 8).toUpperCase();
     
     await creerCommandeFirestore(userId, userState, commande, numeroCommande);
     
   } else if (texte === 'non' || texte === 'annuler') {
-    // Annuler la commande
     userState.commandeEnCours = null;
     userState.panier = [];
     userState.step = 'MENU_PRINCIPAL';
@@ -2322,12 +2325,10 @@ async function creerCommandeFirestore(userId, userState, commande, numeroCommand
 
     const codeSecurite = Math.floor(100000 + Math.random() * 900000).toString();
     
-    // Calculer le prix de livraison
     const prixLivraison = getFraisLivraison();
     const sousTotal = panier.reduce((total, item) => total + (item.prixUnitaire * item.quantite), 0);
     const total = sousTotal + prixLivraison;
 
-    // Récupérer numéro du livreur
     const livreurInfo = await assignerLivreur(userId, commande.quartier);
     let livreurTelephone = null;
     
@@ -2423,9 +2424,8 @@ async function assignerLivreur(userId, quartier) {
       return null;
     }
 
-    // Trouver le livreur le plus proche (simplifié)
     const livreurs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-    const livreur = livreurs[0]; // À améliorer avec géolocalisation
+    const livreur = livreurs[0];
 
     return livreur;
   } catch (error) {
@@ -2529,22 +2529,18 @@ async function afficherDetailCommande(userId, message, userState) {
     message += `📍 Adresse: ${commande.livraison.adresse}\n`;
     message += `📦 Statut: ${gestionPanier.getStatutLivraison(commande.livraison.statut_livraison)}\n\n`;
     
-    // Ajouter pharmacie
     if (commande.pharmacienom) {
       message += `🏥 Pharmacie: ${commande.pharmacienom}\n`;
     }
     
-    // Ajouter livreur si disponible
     if (commande.livraison.livreurNom) {
       message += `👨‍🚀 Livreur: ${commande.livraison.livreurNom}\n`;
     }
     
-    // Ajouter téléphone du livreur si disponible
     if (commande.livraison.livreurTelephone) {
       message += `📞 Livreur: ${commande.livraison.livreurTelephone}\n`;
     }
     
-    // Calculer et ajouter prix de livraison
     const prixArticles = commande.articles.reduce((sum, article) => sum + (article.prix_unitaire * article.quantite), 0);
     const prixLivraison = commande.paiement.montant_total - prixArticles;
     message += `🚚 Livraison: ${prixLivraison} FCFA\n\n`;
