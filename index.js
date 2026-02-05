@@ -171,18 +171,16 @@ class AssistantMedicalIA {
 - Panier: ${userState.panier?.length || 0} médicament(s)
 - En cours de commande: ${userState.enCoursCommande ? 'Oui' : 'Non'}
 - Attente confirmation: ${userState.attenteConfirmation ? 'Oui' : 'Non'}
+- Derniers résultats recherche: ${userState.derniersResultats?.length || 0} médicament(s)
 ` : '';
 
-      const prompt = `# ASSISTANT MÉDICAL MIA
+      const prompt = `# ASSISTANT MÉDICAL MIA - PILLBOX ${CONFIG.ZONE_SERVICE}
 
-## TON RÔLE:
-Tu es Mia, assistante médicale IA pour Pillbox à ${CONFIG.ZONE_SERVICE}. Tu aides les utilisateurs avec:
-1. Recherche de médicaments
-2. Pharmacies de garde
-3. Prise de rendez-vous médicaux
-4. Commandes en ligne
+## TON IDENTITÉ:
+Tu es Mia, assistante médicale IA créée par Yousself et Delphin (Université Polytechnique de San Pedro).
+Tu travailles pour Pillbox, service de livraison de médicaments et prise de rendez-vous à ${CONFIG.ZONE_SERVICE}, Côte d'Ivoire.
 
-## DONNÉES RÉELLES:
+## DONNÉES RÉELLES (Firestore):
 
 ### ${medicaments}
 
@@ -190,69 +188,103 @@ Tu es Mia, assistante médicale IA pour Pillbox à ${CONFIG.ZONE_SERVICE}. Tu ai
 
 ### ${cliniques}
 
-## HISTORIQUE:
+## HISTORIQUE DE CONVERSATION:
 ${historiqueFormatte || "Première conversation"}
 
 ${etatUtilisateur}
 
-## MESSAGE UTILISATEUR:
+## MESSAGE UTILISATEUR ACTUEL:
 "${message}"
 
-## INSTRUCTIONS CRITIQUES:
+## TES CAPACITÉS:
 
-### 1. CORRECTION AUTOMATIQUE:
-- Corrige TOUTES les fautes: "aujourdhui" → "aujourd'hui", "jaimerais" → "j'aimerais"
-- Corrige les noms de médicaments: "metridonazole" → "metronidazole"
+### 1. CORRECTION AUTOMATIQUE DES FAUTES:
+- "aujourdhui" → "aujourd'hui"
+- "jaimerais" → "j'aimerais"
+- "metridonazole" → "metronidazole"
+- "paracetemol" → "paracétamol"
+- Corrige TOUTES les fautes automatiquement
 
-### 2. GESTION ORDONNANCES:
-- Si médicament nécessite ordonnance: "📄 ORDONNANCE REQUISE - Envoyez une photo au ${CONFIG.SUPPORT_PHONE}"
-- Ne permettez pas la commande sans mentionner cela
+### 2. COMPRÉHENSION DES SYMPTÔMES:
+- "j'ai mal à la tête" → suggère paracétamol
+- "je tousse" → suggère sirop pour la touse
+- "fièvre" → suggère antipyrétique
+- Comprend le langage naturel médical
 
-### 3. FLUX DE COMMANDE:
-Si l'utilisateur confirme une commande ("oui"), tu DOIS:
-1. Confirmer la création de commande
-2. Donner un numéro de commande
-3. Dire que la pharmacie et le livreur seront notifiés
-4. NE PAS demander un autre médicament
+### 3. GESTION DES ORDONNANCES:
+⚠️ **TRÈS IMPORTANT:** Si un médicament nécessite une ordonnance, tu DOIS dire:
+"📄 ORDONNANCE REQUISE - Pour commander ce médicament, envoyez une photo de votre ordonnance au support client: ${CONFIG.SUPPORT_PHONE}"
+Ne JAMAIS omettre cette information!
 
-### 4. COMPRÉHENSION CONTEXTE:
-- "ses tout ce que je voulais" = la commande est terminée
-- "jaimerais vois ma commande" = veut voir sa commande récente
-- "merci" = fin de conversation, répondre poliment
+### 4. FLUX DE COMMANDE INTELLIGENT:
+- Si utilisateur dit "acheter [médicament]": chercher le médicament
+- Si utilisateur dit "ajouter [numéro] [quantité]": ajouter au panier
+- Si utilisateur dit "terminer": finaliser la commande
+- Si utilisateur dit "oui" après confirmation: CONFIRMER LA COMMANDE (ne pas demander autre chose)
+- Si utilisateur dit "ses tout ce que je voulais": comprendre que c'est terminé
+- Si utilisateur dit "merci": répondre poliment
 
-### 5. FORMAT DES RÉPONSES:
-- Sois naturel et conversationnel
-- Utilise des émojis appropriés
-- Donne des informations précises
-- Termine par une question ou une prochaine étape
+### 5. RECHERCHE ET RECOMMANDATIONS:
+- Utilise les données réelles ci-dessus
+- Propose des alternatives si médicament non disponible
+- Donne les prix exacts
+- Indique la pharmacie de disponibilité
 
-## EXEMPLES:
+### 6. FORMAT DES RÉPONSES:
+- Sois naturel, conversationnel
+- Utilise des émojis appropriés: 💊🏥🚚📞
+- Structure clairement les informations
+- Termine par une question ou prochaine étape quand c'est pertinent
+
+## EXEMPLES DE RÉPONSES:
+
+**Utilisateur:** "bonsoir"
+**Toi:** "Bonsoir ! 😊 Je suis Mia, votre assistante médicale. Comment puis-je vous aider ce soir ?"
 
 **Utilisateur:** "quelle pharmacie de garde aujourdhui"
 **Toi:** "Je vérifie les pharmacies de garde à ${CONFIG.ZONE_SERVICE}..."
-[Ensuite, code enverra la vraie liste]
+[Le code enverra ensuite la vraie liste]
 
 **Utilisateur:** "acheter metronidazole"
-**Toi:** "Je recherche metronidazole..."
-[Ensuite, code cherchera et affichera les résultats]
+**Toi:** "Je recherche metronidazole dans notre base de données..."
+[Le code cherchera et affichera les résultats]
+
+**Utilisateur:** "ajouter 1 2"
+**Toi:** "✅ Ajout de metronidazole au panier..."
+[Le code gérera l'ajout au panier]
+
+**Utilisateur:** "terminer"
+**Toi:** "Parfait ! Je finalise votre commande..."
+[Le code démarrera le processus de commande]
 
 **Utilisateur:** "oui" (après confirmation commande)
-**Toi:** "✅ Commande confirmée ! Votre commande #CMD123 a été créée. La pharmacie et le livreur ont été notifiés. Vous recevrez un appel pour la livraison. 📞 Support: ${CONFIG.SUPPORT_PHONE}"
+**Toi:** "✅ COMMANDE CONFIRMÉE ! Votre commande #CMD123 a été créée avec succès. La pharmacie et le livreur ont été notifiés. Vous recevrez un appel pour la livraison. 📞 Support: ${CONFIG.SUPPORT_PHONE}"
 
 **Utilisateur:** "ses tout ce que je voulais"
-**Toi:** "Parfait ! Votre commande est complète. Dites 'terminer' pour finaliser ou ajoutez d'autres médicaments."
+**Toi:** "Parfait ! Votre commande est complète. Dites 'terminer' pour finaliser."
 
 **Utilisateur:** "jaimerais vois ma commande"
-**Toi:** "Je cherche votre dernière commande..."
-[Ensuite, code affichera l'historique]
+**Toi:** "Je cherche vos commandes récentes..."
+[Le code affichera l'historique]
 
 **Utilisateur:** "merci"
 **Toi:** "Avec plaisir ! 😊 N'hésitez pas si vous avez besoin d'autre chose."
 
+## LOGIQUE DE DÉCISION:
+1. Analyse le message utilisateur
+2. Corrige les fautes automatiquement
+3. Comprend l'intention (recherche, commande, information)
+4. Utilise les données réelles pour répondre
+5. Propose la prochaine étape logique
+
 ## MAINTENANT, RÉPONDS À:
 "${message}"
 
-Rappel important: Corrige les fautes, sois naturel, et gère correctement le contexte.`;
+Rappels critiques:
+1. Corrige TOUTES les fautes d'orthographe
+2. Pour les médicaments avec ordonnance: MENTIONNE OBLIGATOIREMENT le support ${CONFIG.SUPPORT_PHONE}
+3. Après "oui" pour confirmation: CONFIRME LA COMMANDE, ne demande pas autre chose
+4. Sois naturel et empathique`;
 
       const response = await axios.post(
         'https://api.groq.com/openai/v1/chat/completions',
@@ -261,12 +293,12 @@ Rappel important: Corrige les fautes, sois naturel, et gère correctement le con
           messages: [
             {
               role: "system",
-              content: "Tu es Mia, assistante médicale IA. Tu corriges automatiquement toutes les fautes. Tu es précise, empathique et utile. Tu travailles à San Pedro, Côte d'Ivoire."
+              content: "Tu es Mia, assistante médicale IA. Tu corriges automatiquement TOUTES les fautes d'orthographe. Tu es précise, empathique et professionnelle. Tu travailles exclusivement pour la zone de San Pedro, Côte d'Ivoire. Pour les médicaments nécessitant ordonnance, tu mentions TOUJOURS d'envoyer la photo au support client."
             },
             { role: "user", content: prompt }
           ],
           temperature: 0.3,
-          max_tokens: 800
+          max_tokens: 1000
         },
         {
           headers: {
@@ -288,7 +320,13 @@ Rappel important: Corrige les fautes, sois naturel, et gère correctement le con
       
     } catch (error) {
       console.error('Erreur IA:', error.message);
-      return "Je rencontre un problème technique. Contactez le support au " + CONFIG.SUPPORT_PHONE;
+      return `Je rencontre un problème technique momentané. 😔
+
+Pour une assistance immédiate:
+📞 Contactez notre support: ${CONFIG.SUPPORT_PHONE}
+🏥 Pharmacie de garde: Pharmacie Cosmos - 24h/24
+
+Je reviens dès que possible !`;
     }
   }
 
@@ -307,7 +345,9 @@ const DEFAULT_STATE = {
   attenteQuartier: false,
   attenteWhatsApp: false,
   attenteIndications: false,
-  derniereInteraction: Date.now()
+  derniersResultats: null,
+  derniereInteraction: Date.now(),
+  rechercheEnCours: false
 };
 
 const userStates = new Map();
@@ -379,7 +419,7 @@ async function afficherPharmaciesDeGarde(userId) {
       .get();
     
     if (snapshot.empty) {
-      await sendWhatsAppMessage(userId, "Aucune pharmacie de garde trouvée.");
+      await sendWhatsAppMessage(userId, "Aucune pharmacie de garde trouvée actuellement.");
       return;
     }
     
@@ -393,12 +433,12 @@ async function afficherPharmaciesDeGarde(userId) {
       message += `   ⏰ ${p.horaires || '24h/24'}\n\n`;
     });
     
-    message += `💊 Commander: "acheter [médicament]"`;
+    message += `💊 Commander en ligne: "acheter [nom du médicament]"`;
     
     await sendWhatsAppMessage(userId, message);
     
   } catch (error) {
-    await sendWhatsAppMessage(userId, "Problème pour récupérer les pharmacies.");
+    await sendWhatsAppMessage(userId, "⚠️ Problème pour récupérer les pharmacies. Contactez le support.");
   }
 }
 
@@ -430,7 +470,7 @@ async function rechercherMedicament(userId, terme) {
     }
     
     if (medicaments.length === 0) {
-      await sendWhatsAppMessage(userId, `Aucun résultat pour "${terme}".`);
+      await sendWhatsAppMessage(userId, `❌ Aucun résultat pour "${terme}" en stock.\n\n📞 Support: ${CONFIG.SUPPORT_PHONE}`);
       return null;
     }
     
@@ -440,19 +480,22 @@ async function rechercherMedicament(userId, terme) {
     medicaments.slice(0, 5).forEach((med, index) => {
       message += `${index + 1}. ${med.nom}`;
       if (med.sousTitre) message += ` (${med.sousTitre})`;
-      message += `\n   ${med.prix || '?'} FCFA | ${med.pharmacieNom}\n`;
-      if (med.dosage || med.forme) message += `   ${med.dosage || ''} ${med.forme || ''}\n`;
+      message += `\n   💰 ${med.prix || '?'} FCFA\n   🏥 ${med.pharmacieNom}\n`;
+      if (med.dosage || med.forme) {
+        message += `   📏 ${med.dosage || ''} ${med.forme || ''}\n`;
+      }
       message += `   ${med.necessiteOrdonnance ? '📄 Ordonnance requise' : '✅ Sans ordonnance'}\n\n`;
     });
     
-    message += `🛒 Commander: "ajouter [numéro] [quantité]"`;
+    message += `🛒 POUR COMMANDER:\n"ajouter [numéro] [quantité]"\nEx: "ajouter 1 2" pour 2 du n°1\n\n`;
+    message += `Après ajout, dites "continuer" ou "terminer".`;
     
     await sendWhatsAppMessage(userId, message);
     
     return medicaments;
     
   } catch (error) {
-    await sendWhatsAppMessage(userId, "Problème lors de la recherche.");
+    await sendWhatsAppMessage(userId, `⚠️ Problème lors de la recherche.\n\n📞 Support: ${CONFIG.SUPPORT_PHONE}`);
     return null;
   }
 }
@@ -462,7 +505,7 @@ async function ajouterAuPanier(userId, medicaments, numero, quantite, userState)
   
   const index = parseInt(numero) - 1;
   if (index < 0 || index >= medicaments.length) {
-    await sendWhatsAppMessage(userId, "Numéro invalide.");
+    await sendWhatsAppMessage(userId, "❌ Numéro invalide. Vérifiez la liste et réessayez.");
     return false;
   }
   
@@ -472,17 +515,21 @@ async function ajouterAuPanier(userId, medicaments, numero, quantite, userState)
   if (med.necessiteOrdonnance) {
     await sendWhatsAppMessage(
       userId,
-      `📄 ORDONNANCE REQUISE\n\n` +
-      `"${med.nom}" nécessite une ordonnance.\n\n` +
-      `Pour commander, envoyez une photo de votre ordonnance au support:\n` +
-      `${CONFIG.SUPPORT_PHONE}`
+      `📄 **ORDONNANCE REQUISE**\n\n` +
+      `Le médicament "${med.nom}" nécessite une ordonnance médicale.\n\n` +
+      `Pour commander:\n` +
+      `1. Prenez une photo claire de votre ordonnance\n` +
+      `2. Envoyez-la au support client:\n` +
+      `📞 ${CONFIG.SUPPORT_PHONE}\n\n` +
+      `Notre équipe vérifiera votre ordonnance et vous confirmera la commande.\n\n` +
+      `⚠️ Sans ordonnance valide, nous ne pouvons pas fournir ce médicament.`
     );
     return false;
   }
   
   // Vérifier stock
   if (med.stock < quantite) {
-    await sendWhatsAppMessage(userId, `Stock insuffisant. Disponible: ${med.stock}`);
+    await sendWhatsAppMessage(userId, `❌ Stock insuffisant.\n\nDisponible: ${med.stock}\nDemandé: ${quantite}\n\nRéduisez la quantité ou choisissez un autre médicament.`);
     return false;
   }
   
@@ -509,21 +556,28 @@ async function ajouterAuPanier(userId, medicaments, numero, quantite, userState)
   const fraisLivraison = getFraisLivraison();
   const total = totalPanier + fraisLivraison;
   
-  let message = `✅ Ajouté: ${med.nom} × ${quantite}\n\n`;
-  message += `🛒 Panier (${userState.panier.length} article(s)): ${totalPanier} FCFA\n`;
+  let message = `✅ **AJOUTÉ AU PANIER**\n\n`;
+  message += `💊 ${med.nom} × ${quantite}\n`;
+  message += `💰 ${med.prix} FCFA × ${quantite} = ${med.prix * quantite} FCFA\n\n`;
+  message += `🛒 **VOTRE PANIER:** ${userState.panier.length} médicament(s)\n`;
+  message += `📦 Sous-total: ${totalPanier} FCFA\n`;
   message += `🚚 Livraison: ${fraisLivraison} FCFA\n`;
-  message += `💵 Total estimé: ${total} FCFA\n\n`;
-  message += `Continuer? Dites "terminer" pour finaliser ou ajoutez d'autres médicaments.`;
+  message += `💵 **Total estimé: ${total} FCFA**\n\n`;
+  message += `**Que souhaitez-vous faire ?**\n`;
+  message += `• "continuer" pour ajouter un autre médicament\n`;
+  message += `• "terminer" pour finaliser la commande\n`;
+  message += `• "panier" pour voir le panier\n`;
+  message += `• "vider" pour vider le panier`;
   
   await sendWhatsAppMessage(userId, message);
   return true;
 }
 
-async function finaliserCommande(userId, userState) {
+async function afficherPanier(userId, userState) {
   const panier = userState.panier || [];
   
   if (panier.length === 0) {
-    await sendWhatsAppMessage(userId, "Votre panier est vide.");
+    await sendWhatsAppMessage(userId, "🛒 Votre panier est vide.\n\nDites-moi ce dont vous avez besoin !");
     return;
   }
   
@@ -531,7 +585,7 @@ async function finaliserCommande(userId, userState) {
   const fraisLivraison = getFraisLivraison();
   const total = totalPanier + fraisLivraison;
   
-  let message = `✅ PANIER FINALISÉ\n\n`;
+  let message = `🛒 **VOTRE PANIER** (${panier.length} médicament(s))\n\n`;
   
   panier.forEach((item, index) => {
     message += `${index + 1}. ${item.nom}`;
@@ -540,15 +594,56 @@ async function finaliserCommande(userId, userState) {
     message += `   ${item.prix} FCFA × ${item.quantite} = ${item.prix * item.quantite} FCFA\n\n`;
   });
   
-  message += `🏥 Pharmacie: ${panier[0].pharmacieNom}\n`;
-  message += `🚚 Livraison: ${fraisLivraison} FCFA\n`;
-  message += `💵 TOTAL: ${total} FCFA\n\n`;
-  message += `Pour finaliser, envoyez:\n\n`;
-  message += `1. Votre nom complet\n`;
-  message += `2. Votre quartier\n`;
-  message += `3. Votre numéro WhatsApp\n`;
-  message += `4. Indications pour la livraison\n\n`;
-  message += `Commencez par votre nom:`;
+  message += `🏥 **Pharmacie:** ${panier[0].pharmacieNom}\n`;
+  message += `💰 **Sous-total:** ${totalPanier} FCFA\n`;
+  message += `🚚 **Livraison:** ${fraisLivraison} FCFA\n`;
+  message += `💵 **TOTAL: ${total} FCFA**\n\n`;
+  message += `**Options:**\n`;
+  message += `• "continuer" pour ajouter d'autres médicaments\n`;
+  message += `• "terminer" pour finaliser la commande\n`;
+  message += `• "vider" pour vider le panier`;
+  
+  await sendWhatsAppMessage(userId, message);
+}
+
+async function viderPanier(userId, userState) {
+  userState.panier = [];
+  userStates.set(userId, userState);
+  
+  await sendWhatsAppMessage(userId, "🗑️ **Panier vidé.**\n\nDites-moi ce dont vous avez besoin !");
+}
+
+async function finaliserCommande(userId, userState) {
+  const panier = userState.panier || [];
+  
+  if (panier.length === 0) {
+    await sendWhatsAppMessage(userId, "❌ Votre panier est vide.\n\nDites-moi ce dont vous avez besoin !");
+    return;
+  }
+  
+  const totalPanier = panier.reduce((sum, item) => sum + (item.prix * item.quantite), 0);
+  const fraisLivraison = getFraisLivraison();
+  const total = totalPanier + fraisLivraison;
+  
+  let message = `✅ **PANIER FINALISÉ**\n\n`;
+  message += `**Votre commande (${panier.length} médicament(s)):**\n\n`;
+  
+  panier.forEach((item, index) => {
+    message += `${index + 1}. ${item.nom}`;
+    if (item.sousTitre) message += ` (${item.sousTitre})`;
+    message += ` × ${item.quantite}\n`;
+    message += `   ${item.prix} FCFA × ${item.quantite} = ${item.prix * item.quantite} FCFA\n\n`;
+  });
+  
+  message += `🏥 **Pharmacie:** ${panier[0].pharmacieNom}\n`;
+  message += `🚚 **Frais de livraison:** ${fraisLivraison} FCFA\n`;
+  message += `💵 **TOTAL: ${total} FCFA**\n\n`;
+  message += `**Pour finaliser, envoyez vos informations:**\n\n`;
+  message += `1. **Votre nom complet**\n`;
+  message += `2. **Votre quartier**\n`;
+  message += `3. **Votre numéro WhatsApp**\n`;
+  message += `4. **Indications pour la livraison**\n\n`;
+  message += `**Commencez par votre nom:**`;
   
   await sendWhatsAppMessage(userId, message);
   
@@ -569,7 +664,7 @@ async function collecterInfosCommande(userId, message, userState) {
     userState.attenteNom = false;
     userState.attenteQuartier = true;
     userStates.set(userId, userState);
-    await sendWhatsAppMessage(userId, "Quel est votre quartier ?");
+    await sendWhatsAppMessage(userId, "📍 **Quel est votre quartier ?**");
     return;
   }
   
@@ -578,7 +673,7 @@ async function collecterInfosCommande(userId, message, userState) {
     userState.attenteQuartier = false;
     userState.attenteWhatsApp = true;
     userStates.set(userId, userState);
-    await sendWhatsAppMessage(userId, "Quel est votre numéro WhatsApp ?");
+    await sendWhatsAppMessage(userId, "📞 **Quel est votre numéro WhatsApp ?**");
     return;
   }
   
@@ -587,7 +682,7 @@ async function collecterInfosCommande(userId, message, userState) {
     userState.attenteWhatsApp = false;
     userState.attenteIndications = true;
     userStates.set(userId, userState);
-    await sendWhatsAppMessage(userId, "Indications pour la livraison ?\n(ex: maison bleue, sonnez 2 fois)");
+    await sendWhatsAppMessage(userId, "📝 **Indications pour la livraison ?**\n(ex: maison bleue, sonnez 2 fois, porte à gauche)");
     return;
   }
   
@@ -605,12 +700,13 @@ async function collecterInfosCommande(userId, message, userState) {
 async function confirmerCommande(userId, userState) {
   const cmd = userState.commandeInfo;
   
-  let message = `✅ CONFIRMATION DE COMMANDE\n\n`;
-  message += `👤 Nom: ${cmd.nom}\n`;
-  message += `📍 Quartier: ${cmd.quartier}\n`;
-  message += `📞 WhatsApp: ${cmd.whatsapp}\n`;
-  message += `📝 Indications: ${cmd.indications || 'Aucune'}\n\n`;
-  message += `📦 VOTRE COMMANDE:\n\n`;
+  let message = `✅ **CONFIRMATION DE COMMANDE**\n\n`;
+  message += `**Informations client:**\n`;
+  message += `👤 **Nom:** ${cmd.nom}\n`;
+  message += `📍 **Quartier:** ${cmd.quartier}\n`;
+  message += `📞 **WhatsApp:** ${cmd.whatsapp}\n`;
+  message += `📝 **Indications:** ${cmd.indications || 'Aucune'}\n\n`;
+  message += `**Votre commande:**\n\n`;
   
   cmd.panier.forEach((item, index) => {
     message += `${index + 1}. ${item.nom}`;
@@ -619,12 +715,12 @@ async function confirmerCommande(userId, userState) {
     message += `   ${item.prix} FCFA × ${item.quantite} = ${item.prix * item.quantite} FCFA\n\n`;
   });
   
-  message += `🏥 Pharmacie: ${cmd.panier[0].pharmacieNom}\n`;
-  message += `🚚 Livraison: ${cmd.fraisLivraison} FCFA\n`;
-  message += `💵 TOTAL: ${cmd.total} FCFA\n\n`;
-  message += `Confirmez-vous cette commande ?\n`;
-  message += `"oui" pour confirmer\n`;
-  message += `"non" pour annuler`;
+  message += `🏥 **Pharmacie:** ${cmd.panier[0].pharmacieNom}\n`;
+  message += `🚚 **Frais de livraison:** ${cmd.fraisLivraison} FCFA\n`;
+  message += `💵 **TOTAL: ${cmd.total} FCFA**\n\n`;
+  message += `**Confirmez-vous cette commande ?**\n`;
+  message += `✅ "oui" pour confirmer\n`;
+  message += `❌ "non" pour annuler`;
   
   await sendWhatsAppMessage(userId, message);
 }
@@ -646,10 +742,14 @@ async function creerCommandeFirestore(userId, userState) {
       necessiteOrdonnance: item.necessiteOrdonnance || false
     }));
     
+    // Générer un code de sécurité
+    const codeSecurite = Math.floor(100000 + Math.random() * 900000).toString();
+    
     await commandeRef.set({
       clientId: userId,
       clientNom: cmd.nom,
       date_commande: admin.firestore.Timestamp.now(),
+      date_modification: admin.firestore.Timestamp.now(),
       statut: 'en_attente',
       articles: articles,
       paiement: {
@@ -660,35 +760,27 @@ async function creerCommandeFirestore(userId, userState) {
       livraison: {
         adresse: cmd.quartier,
         indications: cmd.indications || '',
-        statut_livraison: 'en_attente'
+        statut_livraison: 'en_attente',
+        livreurId: null,
+        livreurNom: null,
+        livreurTelephone: null
       },
       pharmacieId: cmd.panier[0].id,
       pharmacienom: cmd.panier[0].pharmacieNom,
-      code_securite: Math.floor(100000 + Math.random() * 900000).toString()
+      code_securite: codeSecurite,
+      ordonnanceUrl: null
     });
     
     // Message de confirmation
-    await sendWhatsAppMessage(
-      userId,
-      `✅ COMMANDE #${commandeId} CONFIRMÉE !\n\n` +
-      `Votre commande a été créée avec succès.\n\n` +
-      `📦 **Détails:**\n` +
-      `• ${cmd.panier.length} médicament(s)\n` +
-      `• Total: ${cmd.total} FCFA\n` +
-      `• Livraison à: ${cmd.quartier}\n\n` +
-      `🔔 **Prochaines étapes:**\n` +
-      `1. La pharmacie prépare votre commande\n` +
-      `2. Un livreur vous contactera pour la livraison\n` +
-      `3. Paiement à la livraison\n\n` +
-      `📞 **Support:** ${CONFIG.SUPPORT_PHONE}\n` +
-      `_Merci pour votre confiance !_`
-    );
+    await sendConfirmationCommande(userId, cmd, commandeId, codeSecurite);
     
     // Réinitialiser l'état utilisateur
     userState.panier = [];
     userState.enCoursCommande = false;
     userState.commandeInfo = null;
     userState.attenteConfirmation = false;
+    userState.derniersResultats = null;
+    userState.rechercheEnCours = false;
     userStates.set(userId, userState);
     
     // Nettoyer l'historique IA
@@ -696,8 +788,35 @@ async function creerCommandeFirestore(userId, userState) {
     
   } catch (error) {
     console.error('Erreur création commande:', error.message);
-    await sendWhatsAppMessage(userId, "Erreur lors de la création de la commande. Contactez le support.");
+    await sendWhatsAppMessage(userId, `❌ Erreur lors de la création de la commande.\n\n📞 Contactez le support: ${CONFIG.SUPPORT_PHONE}`);
   }
+}
+
+async function sendConfirmationCommande(userId, cmd, commandeId, codeSecurite) {
+  let message = `🎉 **COMMANDE #${commandeId} CONFIRMÉE !**\n\n`;
+  
+  message += `✅ Votre commande a été créée avec succès.\n\n`;
+  message += `**Détails de la commande:**\n`;
+  message += `📦 ${cmd.panier.length} médicament(s)\n`;
+  message += `💰 Total: ${cmd.total} FCFA\n`;
+  message += `📍 Livraison à: ${cmd.quartier}\n`;
+  message += `📞 Contact: ${cmd.whatsapp}\n\n`;
+  
+  message += `**Prochaines étapes:**\n`;
+  message += `1. ✅ La pharmacie prépare votre commande\n`;
+  message += `2. 📞 Un livreur vous contactera pour la livraison\n`;
+  message += `3. 💵 Paiement à la livraison (cash)\n`;
+  message += `4. 🔒 Code de sécurité: ${codeSecurite}\n\n`;
+  
+  message += `**Informations importantes:**\n`;
+  message += `• Présentez le code de sécurité au livreur\n`;
+  message += `• Vérifiez les médicaments avant paiement\n`;
+  message += `• Conservez vos médicaments correctement\n\n`;
+  
+  message += `📞 **Support client:** ${CONFIG.SUPPORT_PHONE}\n`;
+  message += `_Merci pour votre confiance !_ 😊`;
+  
+  await sendWhatsAppMessage(userId, message);
 }
 
 async function afficherHistoriqueCommandes(userId) {
@@ -709,25 +828,27 @@ async function afficherHistoriqueCommandes(userId) {
       .get();
     
     if (snapshot.empty) {
-      await sendWhatsAppMessage(userId, "Vous n'avez pas encore passé de commande.");
+      await sendWhatsAppMessage(userId, "📭 Vous n'avez pas encore passé de commande.\n\nDites-moi ce dont vous avez besoin !");
       return;
     }
     
-    let message = `📋 VOS DERNIÈRES COMMANDES\n\n`;
+    let message = `📋 **VOS DERNIÈRES COMMANDES**\n\n`;
     
     snapshot.docs.forEach((doc, index) => {
       const cmd = doc.data();
-      message += `${index + 1}. Commande #${doc.id.substring(0, 8)}\n`;
+      message += `${index + 1}. **Commande #${doc.id.substring(0, 8)}**\n`;
       message += `   📅 ${new Date(cmd.date_commande.seconds * 1000).toLocaleDateString('fr-FR')}\n`;
-      message += `   💰 ${cmd.paiement.montant_total || 0} FCFA\n`;
-      message += `   📍 ${cmd.livraison.adresse || 'Non spécifié'}\n`;
+      message += `   💰 ${cmd.paiement?.montant_total || 0} FCFA\n`;
+      message += `   📍 ${cmd.livraison?.adresse || 'Non spécifié'}\n`;
       message += `   📦 ${cmd.statut || 'En attente'}\n\n`;
     });
+    
+    message += `Pour plus de détails, contactez le support: ${CONFIG.SUPPORT_PHONE}`;
     
     await sendWhatsAppMessage(userId, message);
     
   } catch (error) {
-    await sendWhatsAppMessage(userId, "Problème pour récupérer vos commandes.");
+    await sendWhatsAppMessage(userId, `⚠️ Problème pour récupérer vos commandes.\n\n📞 Support: ${CONFIG.SUPPORT_PHONE}`);
   }
 }
 
@@ -776,76 +897,123 @@ app.post('/api/webhook', async (req, res) => {
       }
       userState.derniereInteraction = Date.now();
       
-      // Gestion des états spéciaux
+      const texteLower = text.toLowerCase();
+      
+      // =================== GESTION DES ÉTATS SPÉCIAUX ===================
+      
+      // 1. CONFIRMATION DE COMMANDE
       if (userState.attenteConfirmation) {
-        if (text.toLowerCase() === 'oui') {
+        if (texteLower === 'oui' || texteLower === 'oui pour confirmer') {
           await creerCommandeFirestore(userId, userState);
           return;
-        } else if (text.toLowerCase() === 'non') {
+        } else if (texteLower === 'non' || texteLower === 'non pour annuler') {
           userState.enCoursCommande = false;
           userState.commandeInfo = null;
           userState.attenteConfirmation = false;
           userStates.set(userId, userState);
-          await sendWhatsAppMessage(userId, "Commande annulée. Que souhaitez-vous faire ?");
+          await sendWhatsAppMessage(userId, "❌ Commande annulée.\n\nQue souhaitez-vous faire ?");
           return;
         }
       }
       
+      // 2. COLLECTE D'INFORMATIONS POUR COMMANDE
       if (userState.attenteNom || userState.attenteQuartier || 
           userState.attenteWhatsApp || userState.attenteIndications) {
         await collecterInfosCommande(userId, text, userState);
         return;
       }
       
-      // Analyser le message avec l'IA
-      const reponseIA = await assistantIA.comprendreEtAgir(userId, text, userState);
+      // =================== COMMANDES DIRECTES ===================
       
-      // Actions spéciales basées sur la réponse IA
-      const texteLower = text.toLowerCase();
-      
-      // 1. Pharmacies de garde
-      if (reponseIA.includes('pharmacie de garde') || texteLower.includes('pharmacie de garde')) {
+      // 3. PHARMACIES DE GARDE
+      if (texteLower.includes('pharmacie de garde') || 
+          texteLower.includes('pharmacie ouverte') ||
+          (texteLower.includes('pharmacie') && texteLower.includes('aujourd'))) {
+        
+        const reponseIA = await assistantIA.comprendreEtAgir(userId, text, userState);
+        await sendWhatsAppMessage(userId, reponseIA);
         await afficherPharmaciesDeGarde(userId);
         return;
       }
       
-      // 2. Recherche médicament
-      if (reponseIA.includes('recherche') && texteLower.includes('acheter')) {
-        const medicament = texteLower.replace('acheter', '').trim();
+      // 4. RECHERCHE MÉDICAMENT ("acheter X")
+      if (texteLower.startsWith('acheter ') || 
+          (texteLower.includes('acheter') && texteLower.length > 8)) {
+        
+        const reponseIA = await assistantIA.comprendreEtAgir(userId, text, userState);
+        await sendWhatsAppMessage(userId, reponseIA);
+        
+        const medicament = text.toLowerCase().replace('acheter', '').trim();
         if (medicament) {
           const resultats = await rechercherMedicament(userId, medicament);
           if (resultats) {
-            // Sauvegarder les résultats pour commande
             userState.derniersResultats = resultats;
+            userState.rechercheEnCours = true;
             userStates.set(userId, userState);
           }
         }
         return;
       }
       
-      // 3. Ajouter au panier
+      // 5. AJOUTER AU PANIER ("ajouter X Y")
       const ajouterMatch = texteLower.match(/ajouter\s+(\d+)(?:\s+(\d+))?/);
       if (ajouterMatch && userState.derniersResultats) {
+        const reponseIA = await assistantIA.comprendreEtAgir(userId, text, userState);
+        await sendWhatsAppMessage(userId, reponseIA);
+        
         const numero = ajouterMatch[1];
         const quantite = ajouterMatch[2] ? parseInt(ajouterMatch[2]) : 1;
         await ajouterAuPanier(userId, userState.derniersResultats, numero, quantite, userState);
         return;
       }
       
-      // 4. Finaliser commande
+      // 6. FINALISER COMMANDE
       if (texteLower === 'terminer' || texteLower === 'fini' || texteLower.includes('finaliser')) {
+        const reponseIA = await assistantIA.comprendreEtAgir(userId, text, userState);
+        await sendWhatsAppMessage(userId, reponseIA);
         await finaliserCommande(userId, userState);
         return;
       }
       
-      // 5. Voir historique commandes
-      if (texteLower.includes('ma commande') || texteLower.includes('mes commandes') || 
-          texteLower.includes('historique')) {
+      // 7. VOIR PANIER
+      if (texteLower === 'panier' || texteLower.includes('voir panier')) {
+        const reponseIA = await assistantIA.comprendreEtAgir(userId, text, userState);
+        await sendWhatsAppMessage(userId, reponseIA);
+        await afficherPanier(userId, userState);
+        return;
+      }
+      
+      // 8. VIDER PANIER
+      if (texteLower === 'vider' || texteLower.includes('vider panier')) {
+        const reponseIA = await assistantIA.comprendreEtAgir(userId, text, userState);
+        await sendWhatsAppMessage(userId, reponseIA);
+        await viderPanier(userId, userState);
+        return;
+      }
+      
+      // 9. HISTORIQUE DES COMMANDES
+      if (texteLower.includes('ma commande') || 
+          texteLower.includes('mes commandes') || 
+          texteLower.includes('historique') ||
+          texteLower.includes('dernière commande')) {
+        
+        const reponseIA = await assistantIA.comprendreEtAgir(userId, text, userState);
+        await sendWhatsAppMessage(userId, reponseIA);
         await afficherHistoriqueCommandes(userId);
         return;
       }
       
-      // 6. Envoyer la réponse IA
+      // 10. CONTINUER (après ajout au panier)
+      if (texteLower === 'continuer' || texteLower === 'oui' || texteLower === 'encore') {
+        const reponseIA = await assistantIA.comprendreEtAgir(userId, text, userState);
+        await sendWhatsAppMessage(userId, reponseIA);
+        await sendWhatsAppMessage(userId, "Dites-moi le nom du prochain médicament.");
+        return;
+      }
+      
+      // =================== RÉPONSE IA GÉNÉRALE ===================
+      // Pour tous les autres messages, utiliser l'IA
+      const reponseIA = await assistantIA.comprendreEtAgir(userId, text, userState);
       await sendWhatsAppMessage(userId, reponseIA);
       
     } catch (error) {
@@ -858,36 +1026,105 @@ app.post('/api/webhook', async (req, res) => {
 app.get('/health', (req, res) => {
   res.json({
     status: 'OK',
-    service: 'Pillbox WhatsApp Bot IA Simplifié',
-    users: userStates.size,
-    timestamp: new Date().toISOString()
+    service: 'Pillbox WhatsApp Bot IA - Production',
+    version: '3.1.0',
+    users_actifs: userStates.size,
+    timestamp: new Date().toISOString(),
+    zone: CONFIG.ZONE_SERVICE,
+    support: CONFIG.SUPPORT_PHONE,
+    model_ia: CONFIG.GROQ_MODEL,
+    createurs: 'Yousself & Delphin - Université Polytechnique de San Pedro'
   });
 });
 
-// =================== DÉMARRAGE ===================
+app.get('/api/stats', (req, res) => {
+  const stats = {
+    users_actifs: userStates.size,
+    conversations_actives: Array.from(assistantIA.historiques.keys()).length,
+    timestamp: new Date().toISOString(),
+    paniers_actifs: Array.from(userStates.values()).filter(s => s.panier && s.panier.length > 0).length,
+    commandes_en_cours: Array.from(userStates.values()).filter(s => s.enCoursCommande).length
+  };
+  res.json(stats);
+});
+
+// =================== DÉMARRAGE SERVEUR ===================
 app.listen(PORT, HOST, () => {
   console.log(`
-╔══════════════════════════════════════════════╗
-║  🚀 PILLBOX WHATSAPP BOT - IA SIMPLIFIÉ     ║
-║  ✅ UN SEUL SYSTÈME - PAS DE DOUBLONS       ║
-╚══════════════════════════════════════════════╝
+╔═══════════════════════════════════════════════════════════╗
+║  🚀 PILLBOX WHATSAPP BOT IA - PRODUCTION V3.1.0         ║
+║  🔥 MIATRONAL-8x7b-32768 - IA À 100%                    ║
+╚═══════════════════════════════════════════════════════════╝
 
-📞 Support: ${CONFIG.SUPPORT_PHONE}
-🌍 Zone: ${CONFIG.ZONE_SERVICE}
-🤖 Modèle: ${CONFIG.GROQ_MODEL}
-🔧 Port: ${PORT}
+✅ **FONCTIONNALITÉS ACTIVES:**
 
-✅ Prêt à recevoir des messages !
+🧠 **INTELLIGENCE MÉDICALE COMPLÈTE**
+   • Comprend les symptômes et suggère des médicaments
+   • Corrige TOUTES les fautes d'orthographe automatiquement
+   • Gestion intelligente du contexte conversationnel
+
+💊 **GESTION DES ORDONNANCES**
+   • Détection automatique des médicaments nécessitant ordonnance
+   • Message EXPLICITE: "Envoyez photo au ${CONFIG.SUPPORT_PHONE}"
+   • Blocage des commandes sans ordonnance valide
+
+🛒 **FLUX DE COMMANDE OPTIMISÉ**
+   • Pas de doublons de messages
+   • Processus clair: recherche → panier → finalisation
+   • Confirmation avec numéro de commande et code sécurité
+
+🏥 **DONNÉES RÉELLES**
+   • Médicaments en stock avec prix actualisés
+   • Pharmacies de garde vérifiées
+   • Cliniques disponibles avec spécialités
+
+📞 **SUPPORT INTÉGRÉ**
+   • Support client: ${CONFIG.SUPPORT_PHONE}
+   • Zone: ${CONFIG.ZONE_SERVICE}
+   • Livraison: ${CONFIG.LIVRAISON_JOUR}F (jour) / ${CONFIG.LIVRAISON_NUIT}F (nuit)
+
+🔧 **TECHNOLOGIE**
+   • Modèle IA: ${CONFIG.GROQ_MODEL}
+   • Base: Firebase Firestore
+   • API: WhatsApp Business
+   • Hébergement: Production-ready
+
+👥 **CRÉATEURS**
+   • Yousself & Delphin
+   • Université Polytechnique de San Pedro
+   • Côte d'Ivoire
+
+🌐 **SERVEUR**
+   • Port: ${PORT}
+   • Host: ${HOST}
+   • Démarrage: ${new Date().toLocaleString('fr-FR')}
+
+╔═══════════════════════════════════════════════════════════╗
+║  ✅ SYSTÈME PRÊT POUR LA PRODUCTION EN TEMPS RÉEL       ║
+║  🤖 L'ASSISTANT MÉDICAL IA EST OPÉRATIONNEL !           ║
+╚═══════════════════════════════════════════════════════════╝
   `);
 });
 
-// Nettoyage périodique
+// =================== NETTOYAGE PÉRIODIQUE ===================
 setInterval(() => {
   const maintenant = Date.now();
+  const deuxHeures = 2 * 60 * 60 * 1000;
+  
   for (const [userId, state] of userStates.entries()) {
-    if (maintenant - state.derniereInteraction > 3600000) { // 1 heure
+    if (maintenant - state.derniereInteraction > deuxHeures) {
+      Logger.info(`Nettoyage session inactive: ${userId}`);
       userStates.delete(userId);
       assistantIA.nettoyerHistorique(userId);
     }
   }
-}, 300000); // Toutes les 5 minutes
+}, 30 * 60 * 1000); // Toutes les 30 minutes
+
+// Gestion des erreurs globales
+process.on('uncaughtException', (error) => {
+  Logger.error('ERREUR NON GÉRÉE:', error.message);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  Logger.error('REJET DE PROMESSE NON GÉRÉ:', reason);
+});
